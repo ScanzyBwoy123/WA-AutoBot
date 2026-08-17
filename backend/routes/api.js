@@ -18,24 +18,42 @@ router.get('/bot/status', (req, res) => {
   });
 });
 
-router.post('/bot/start', (req, res) => {
-  const result = whatsappService.connect();
+router.post('/bot/start', ownerAuth, async (req, res) => {
+  try {
+    const result = await whatsappService.connect();
 
-  res.json({
-    success: true,
-    data: db.getStats(),
-    result
-  });
+    res.json({
+      success: true,
+      data: db.getStats(),
+      result
+    });
+  } catch (error) {
+    console.error('[Bot Start Error]', error);
+
+    res.status(500).json({
+      success: false,
+      error: 'Unable to start WhatsApp connection.'
+    });
+  }
 });
 
-router.post('/bot/stop', (req, res) => {
-  const result = whatsappService.disconnect();
+router.post('/bot/stop', ownerAuth, async (req, res) => {
+  try {
+    const result = await whatsappService.disconnect();
 
-  res.json({
-    success: true,
-    data: db.getStats(),
-    result
-  });
+    res.json({
+      success: true,
+      data: db.getStats(),
+      result
+    });
+  } catch (error) {
+    console.error('[Bot Stop Error]', error);
+
+    res.status(500).json({
+      success: false,
+      error: 'Unable to stop WhatsApp connection.'
+    });
+  }
 });
 
 // =========================
