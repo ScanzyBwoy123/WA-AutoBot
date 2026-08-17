@@ -41,11 +41,8 @@ class WhatsAppService {
     try {
       console.log('🔄 Starting WhatsApp connection...');
 
-      // Let Puppeteer automatically find the Chrome
-      // installed during npm install.
-      const chromePath =
-        process.env.PUPPETEER_EXECUTABLE_PATH ||
-        puppeteer.executablePath();
+      // Let Puppeteer find the Chrome installed during npm install.
+      const chromePath = puppeteer.executablePath();
 
       console.log(
         '[WhatsAppService] Puppeteer Chrome path:',
@@ -110,7 +107,6 @@ class WhatsAppService {
 
         this.isReady = false;
         this.isConnecting = false;
-        this.client = null;
       });
 
       this.client.on('message', async (message) => {
@@ -134,7 +130,6 @@ class WhatsAppService {
 
       this.isReady = false;
       this.isConnecting = false;
-      this.client = null;
 
       throw error;
     }
@@ -168,7 +163,6 @@ class WhatsAppService {
         error
       );
 
-      this.client = null;
       this.isReady = false;
       this.isConnecting = false;
 
