@@ -1,5 +1,5 @@
+
 const { Client, LocalAuth } = require('whatsapp-web.js');
-const puppeteer = require('puppeteer');
 const qrcode = require('qrcode-terminal');
 
 class WhatsAppService {
@@ -11,7 +11,6 @@ class WhatsAppService {
     console.log('[WhatsAppService] Real WhatsApp service initialized');
   }
 
-  // Required by server.js
   init() {
     console.log('[WhatsAppService] Service initialized');
 
@@ -41,10 +40,12 @@ class WhatsAppService {
     try {
       console.log('🔄 Starting WhatsApp connection...');
 
-      const chromePath = puppeteer.executablePath();
+      const chromePath =
+        process.env.CHROME_BIN ||
+        '/opt/render/.cache/puppeteer/chrome/linux-148.0.7778.97/chrome-linux64/chrome';
 
       console.log(
-        '[WhatsAppService] Puppeteer Chrome path:',
+        '[WhatsAppService] Chrome executable:',
         chromePath
       );
 
@@ -56,13 +57,15 @@ class WhatsAppService {
         puppeteer: {
           executablePath: chromePath,
           headless: true,
+
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-gpu',
             '--no-first-run',
-            '--no-zygote'
+            '--no-zygote',
+            '--disable-extensions'
           ]
         }
       });
