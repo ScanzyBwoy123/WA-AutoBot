@@ -11,6 +11,16 @@ class WhatsAppService {
     console.log('[WhatsAppService] Real WhatsApp service initialized');
   }
 
+  // Required by server.js
+  init() {
+    console.log('[WhatsAppService] Service initialized');
+
+    return {
+      success: true,
+      message: 'WhatsApp service initialized.'
+    };
+  }
+
   async connect() {
     if (this.isReady) {
       return {
@@ -46,21 +56,19 @@ class WhatsAppService {
         puppeteer: {
           executablePath: chromePath,
           headless: true,
-
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-gpu',
             '--no-first-run',
-            '--no-zygote',
-            '--single-process'
+            '--no-zygote'
           ]
         }
       });
 
       this.client.on('qr', (qr) => {
-        console.log('📱 WhatsApp QR CODE RECEIVED');
+        console.log('📱 WHATSAPP QR CODE RECEIVED');
 
         qrcode.generate(qr, {
           small: true
@@ -78,6 +86,7 @@ class WhatsAppService {
         );
 
         this.isReady = false;
+        this.isConnecting = false;
       });
 
       this.client.on('ready', () => {
