@@ -1,7 +1,75 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const fs = require('fs');
+const path = require('path');
 
 const db = require('../database/db');
+
+function findChromeExecutable() {
+  const possiblePaths = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    '/opt/render/project/src/backend/.cache/puppeteer',
+    '/opt/render/.cache/puppeteer',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser'
+  ].filter(Boolean);
+
+  for (const basePath of possiblePaths) {
+    try {
+      if (fs.existsSync(basePath) && fs.statSync(basePath).isFile()) {
+        return basePath;
+      }
+    } catch (error) {
+      // Ignore invalid paths
+    }
+  }
+
+  function searchDirectory(directory, depth = 0) {
+    if (depth > 5) return null;
+
+    try {
+      if (!fs.existsSync(directory)) return null;
+
+      const entries = fs.readdirSync(directory, { withFileTypes: true });
+
+      for (const entry of entries) {
+        const fullPath = path.join(directory, entry.name);
+
+        if (
+          entry.isFile() &&
+          (entry.name === 'chrome' ||
+            entry.name === 'chrome.exe' ||
+            entry.name === 'google-chrome')
+        ) {
+          return fullPath;
+        }
+
+        if (entry.isDirectory()) {
+          const found = searchDirectory(fullPath, depth + 1);
+          if (found) return found;
+        }
+      }
+    } catch (error) {
+      // Ignore directories that cannot be accessed
+    }
+
+    return null;
+  }
+
+  const searchLocations = [
+    '/opt/render/.cache/puppeteer',
+    '/opt/render/project/src/backend/.cache/puppeteer'
+  ];
+
+  for (const location of searchLocations) {
+    const found = searchDirectory(location);
+    if (found) return found;
+  }
+
+  return null;
+}
 
 class WhatsAppService {
   constructor() {
@@ -12,16 +80,35 @@ class WhatsAppService {
   init() {
     if (this.initialized) return;
 
+    const chromePath = findChromeExecutable();
+
+    console.log(
+      '[WhatsAppService] Chrome executable:',
+      chromePath || 'NOT FOUND'
+    );
+
     this.client = new Client({
       authStrategy: new LocalAuth({
         dataPath: '/var/data/whatsapp-session'
       }),
+
       puppeteer: {
         headless: true,
+
+        ...(chromePath
+          ? {
+              executablePath: chromePath
+            }
+          : {}),
+
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage'
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--no-first-run',
+          '--no-zygote',
+          '--single-process'
         ]
       }
     });
@@ -44,23 +131,34 @@ class WhatsAppService {
     this.client.on('auth_failure', (message) => {
       console.error('❌ WhatsApp authentication failed:', message);
       db.setBotStatus('Disconnected');
-      db.logActivity('WhatsApp authentication failed', 'error');
+      db.logActivity(
+        'WhatsApp authentication failed',
+        'error'
+      );
     });
 
     this.client.on('disconnected', (reason) => {
       console.log('🔴 WhatsApp disconnected:', reason);
       db.setBotStatus('Disconnected');
-      db.logActivity('WhatsApp client disconnected', 'warning');
+      db.logActivity(
+        'WhatsApp client disconnected',
+        'warning'
+      );
     });
 
     this.client.on('message', async (message) => {
       db.incrementCommands();
-      console.log(`📩 Message received from ${message.from}: ${message.body}`);
+
+      console.log(
+        `📩 Message received from ${message.from}: ${message.body}`
+      );
     });
 
     this.initialized = true;
 
-    console.log('[WhatsAppService] Real WhatsApp service initialized');
+    console.log(
+      '[WhatsAppService] Real WhatsApp service initialized'
+    );
   }
 
   async connect() {
@@ -69,6 +167,19 @@ class WhatsAppService {
     }
 
     console.log('🔄 Starting WhatsApp connection...');
+
+    const chromePath = findChromeExecutable();
+
+    if (!chromePath) {
+      throw new Error(
+        'Chrome executable was not found on the Render server.'
+      );
+    }
+
+    console.log(
+      '[WhatsAppService] Using Chrome:',
+      chromePath
+    );
 
     await this.client.initialize();
 
