@@ -3,7 +3,7 @@ const db = require('../backend/database/db');
 module.exports = {
   name: 'menu',
   category: 'System',
-  description: 'Display available dynamic commands',
+  description: 'Display available commands and bot information',
 
   async execute(args, context) {
     const commandRouter = require('./index');
@@ -22,7 +22,10 @@ module.exports = {
       grouped[category].push(command);
     }
 
-    let menuText = `╭─── ${settings.botName} ───╮\n`;
+    let menuText = `╭━━━ 🤖 ${settings.botName} ━━━╮\n`;
+    menuText += `│\n`;
+    menuText += `│ 👨🏽‍💻 Created by: Junior Dangote\n`;
+    menuText += `│ 💎 Automate. Connect. Simplify.\n`;
     menuText += `│\n`;
 
     for (const [category, categoryCommands] of Object.entries(grouped)) {
@@ -35,8 +38,12 @@ module.exports = {
       menuText += `│\n`;
     }
 
-    menuText += `╰────────────────────╯\n`;
-    menuText += `\nPrefix: ${settings.prefix}`;
+    menuText += `│ ℹ️ .about — About WA-AutoBot\n`;
+    menuText += `│ 👑 .owner — Bot creator\n`;
+    menuText += `│ 🛠️ .support — Contact support\n`;
+    menuText += `│\n`;
+    menuText += `╰━━━━━━━━━━━━━━━━━━━━╯\n`;
+    menuText += `Prefix: ${settings.prefix}`;
 
     return menuText;
   }
