@@ -1,6 +1,7 @@
 
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const puppeteer = require('puppeteer');
 
 class WhatsAppService {
   constructor() {
@@ -40,14 +41,29 @@ class WhatsAppService {
     try {
       console.log('🔄 Starting WhatsApp connection...');
 
-      const chromePath =
-        process.env.CHROME_BIN ||
-        '/opt/render/.cache/puppeteer/chrome/linux-148.0.7778.97/chrome-linux64/chrome';
+      let chromePath = process.env.CHROME_BIN;
+
+      if (!chromePath) {
+        try {
+          chromePath = puppeteer.executablePath();
+        } catch (error) {
+          console.error(
+            '[WhatsAppService] Could not determine Puppeteer Chrome path:',
+            error.message
+          );
+        }
+      }
 
       console.log(
-        '[WhatsAppService] Chrome executable:',
-        chromePath
+        '[WhatsAppService] Puppeteer Chrome path:',
+        chromePath || 'NOT FOUND'
       );
+
+      if (!chromePath) {
+        throw new Error(
+          'Chrome executable could not be found. Make sure Puppeteer Chrome is installed during the Render build.'
+        );
+      }
 
       this.client = new Client({
         authStrategy: new LocalAuth({
@@ -65,7 +81,10 @@ class WhatsAppService {
             '--disable-gpu',
             '--no-first-run',
             '--no-zygote',
-            '--disable-extensions'
+            '--disable-extensions',
+            '--disable-background-networking',
+            '--disable-background-timer-throttling',
+            '--disable-renderer-backgrounding'
           ]
         }
       });
