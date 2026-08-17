@@ -1,17 +1,9 @@
 const path = require('path');
 const fs = require('fs');
-const { execFileSync } = require('child_process');
 
-// IMPORTANT:
-// Keep Puppeteer's Chrome inside the project so Render includes it
-// in the deployed build.
-const puppeteerCache = path.resolve(__dirname, '../.puppeteer');
-
-process.env.PUPPETEER_CACHE_DIR = puppeteerCache;
-
+const puppeteer = require('puppeteer');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-const puppeteer = require('puppeteer');
 
 class WhatsAppService {
   constructor() {
@@ -20,7 +12,6 @@ class WhatsAppService {
     this.isConnecting = false;
 
     console.log('[WhatsAppService] Real WhatsApp service initialized');
-    console.log('[WhatsAppService] Puppeteer cache:', puppeteerCache);
   }
 
   init() {
@@ -33,7 +24,7 @@ class WhatsAppService {
   }
 
   getChromePath() {
-    // 1. Use CHROME_BIN if Render provides one.
+    // Use Render/environment Chrome if explicitly provided.
     if (
       process.env.CHROME_BIN &&
       fs.existsSync(process.env.CHROME_BIN)
@@ -46,87 +37,25 @@ class WhatsAppService {
       return process.env.CHROME_BIN;
     }
 
-    // 2. Ask Puppeteer where its Chrome is.
-    const puppeteerPath = puppeteer.executablePath();
+    // Use the Chrome installed by Puppeteer.
+    const chromePath = puppeteer.executablePath();
 
     console.log(
-      '[WhatsAppService] Puppeteer executable path:',
-      puppeteerPath
+      '[WhatsAppService] Puppeteer Chrome:',
+      chromePath
     );
 
-    if (puppeteerPath && fs.existsSync(puppeteerPath)) {
-      console.log(
-        '[WhatsAppService] Chrome found:',
-        puppeteerPath
-      );
-
-      return puppeteerPath;
-    }
-
-    return null;
-  }
-
-  installChromeIfNeeded() {
-    let chromePath = this.getChromePath();
-
-    if (chromePath) {
+    if (chromePath && fs.existsSync(chromePath)) {
       return chromePath;
     }
 
-    console.log(
-      '⚠️ Chrome was not found. Installing Chrome into project cache...'
+    throw new Error(
+      `Chrome executable not found at: ${chromePath}`
     );
-
-    try {
-      fs.mkdirSync(puppeteerCache, {
-        recursive: true
-      });
-
-      execFileSync(
-        'npx',
-        [
-          'puppeteer',
-          'browsers',
-          'install',
-          'chrome'
-        ],
-        {
-          stdio: 'inherit',
-          env: {
-            ...process.env,
-            PUPPETEER_CACHE_DIR: puppeteerCache
-          }
-        }
-      );
-
-      chromePath = this.getChromePath();
-
-      if (!chromePath) {
-        throw new Error(
-          'Chrome installation completed but Chrome executable could not be located.'
-        );
-      }
-
-      console.log(
-        '✅ Chrome successfully installed:',
-        chromePath
-      );
-
-      return chromePath;
-
-    } catch (error) {
-      console.error(
-        '❌ Chrome installation failed:',
-        error
-      );
-
-      throw new Error(
-        `Unable to install/find Chrome for WhatsApp bot: ${error.message}`
-      );
-    }
   }
 
   async connect() {
+    // Never start a second browser.
     if (this.isReady) {
       return {
         success: true,
@@ -146,16 +75,16 @@ class WhatsAppService {
     try {
       console.log('🔄 Starting WhatsApp connection...');
 
-      const chromePath = this.installChromeIfNeeded();
+      const chromePath = this.getChromePath();
 
       console.log(
-        '[WhatsAppService] Final Chrome executable:',
+        '[WhatsAppService] Chrome executable:',
         chromePath
       );
 
       this.client = new Client({
         authStrategy: new LocalAuth({
-          dataPath: './.wwebjs_auth'
+          dataPath: path.resolve(__dirname, '../.wwebjs_auth')
         }),
 
         puppeteer: {
@@ -165,29 +94,43 @@ class WhatsAppService {
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
+
+            // Memory-saving options
             '--disable-dev-shm-usage',
             '--disable-gpu',
-            '--no-first-run',
-            '--no-zygote',
+            '--disable-software-rasterizer',
             '--disable-extensions',
             '--disable-background-networking',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding',
+            '--disable-sync',
             '--disable-default-apps',
-            '--disable-sync'
+            '--no-first-run',
+            '--no-zygote',
+
+            // Reduce Chrome memory usage
+            '--single-process',
+            '--renderer-process-limit=1',
+            '--disable-features=Translate,BackForwardCache',
+            '--disable-ipc-flooding-protection'
           ]
         }
       });
 
       this.client.on('qr', (qr) => {
         console.log('');
-        console.log('========================================');
+        console.log('==========================================');
         console.log('📱 WHATSAPP QR CODE RECEIVED');
-        console.log('========================================');
+        console.log('==========================================');
 
         qrcode.generate(qr, {
           small: true
         });
 
-        console.log('========================================');
+        console.log('==========================================');
+        console.log('Scan this QR code with WhatsApp.');
+        console.log('==========================================');
       });
 
       this.client.on('authenticated', () => {
@@ -206,9 +149,9 @@ class WhatsAppService {
 
       this.client.on('ready', () => {
         console.log('');
-        console.log('========================================');
+        console.log('==========================================');
         console.log('✅ WHATSAPP CLIENT IS READY');
-        console.log('========================================');
+        console.log('==========================================');
 
         this.isReady = true;
         this.isConnecting = false;
@@ -222,12 +165,29 @@ class WhatsAppService {
 
         this.isReady = false;
         this.isConnecting = false;
+        this.client = null;
+      });
+
+      this.client.on('change_state', (state) => {
+        console.log(
+          '[WhatsAppService] WhatsApp state:',
+          state
+        );
       });
 
       this.client.on('message', async (message) => {
-        console.log(
-          `📩 Message from ${message.from}: ${message.body}`
-        );
+        try {
+          console.log(
+            `📩 Message from ${message.from}: ${message.body}`
+          );
+
+          // Your bot commands can be added here later.
+        } catch (error) {
+          console.error(
+            '[WhatsAppService] Message handler error:',
+            error
+          );
+        }
       });
 
       await this.client.initialize();
@@ -246,6 +206,20 @@ class WhatsAppService {
       this.isReady = false;
       this.isConnecting = false;
 
+      // Clean up failed client.
+      if (this.client) {
+        try {
+          await this.client.destroy();
+        } catch (cleanupError) {
+          console.error(
+            '[WhatsAppService] Cleanup error:',
+            cleanupError
+          );
+        }
+      }
+
+      this.client = null;
+
       throw error;
     }
   }
@@ -253,11 +227,16 @@ class WhatsAppService {
   async disconnect() {
     try {
       if (!this.client) {
+        this.isReady = false;
+        this.isConnecting = false;
+
         return {
           success: true,
           message: 'WhatsApp is not connected.'
         };
       }
+
+      console.log('🔴 Stopping WhatsApp connection...');
 
       await this.client.destroy();
 
@@ -278,6 +257,7 @@ class WhatsAppService {
         error
       );
 
+      this.client = null;
       this.isReady = false;
       this.isConnecting = false;
 
@@ -286,9 +266,18 @@ class WhatsAppService {
   }
 
   getStatus() {
+    let status = 'Disconnected';
+
+    if (this.isReady) {
+      status = 'Connected';
+    } else if (this.isConnecting) {
+      status = 'Connecting';
+    }
+
     return {
       connected: this.isReady,
-      connecting: this.isConnecting
+      connecting: this.isConnecting,
+      status
     };
   }
 }
