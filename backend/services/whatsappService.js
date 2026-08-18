@@ -2,97 +2,37 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const fs = require('fs');
 const path = require('path');
-const commandHandler = require('../../commands');
+const commands = require('../../commands');
 class WhatsAppService {
   constructor() {
     this.client = null;
     this.isReady = false;
     this.isConnecting = false;
-    this.qrCode = null;
     this.pairingCode = null;
     this.lastError = null;
     this.pairingRequested = false;
     console.log(
-      '[WhatsAppService] Pairing-code WhatsApp service initialized'
+      '[WhatsAppService] Stable Render WhatsApp service initialized'
     );
   }
   init() {
-    console.log('[WhatsAppService] Service initialized');
     return {
       success: true,
       message: 'WhatsApp service initialized.'
     };
   }
   getPhoneNumber() {
-    let number =
+    return String(
       process.env.WHATSAPP_PHONE ||
       process.env.OWNER_NUMBER ||
-      '';
-    number = String(number)
-      .replace(/\D/g, '');
-    return number;
-  }
-  getChromePath() {
-    const candidates = [];
-    if (process.env.CHROME_BIN) {
-      candidates.push(process.env.CHROME_BIN);
-    }
-    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-      candidates.push(
-        process.env.PUPPETEER_EXECUTABLE_PATH
-      );
-    }
-    const cacheRoots = [
-      process.env.PUPPETEER_CACHE_DIR,
-      path.join(process.cwd(), '.puppeteer'),
-      path.join(process.cwd(), 'backend', '.puppeteer'),
-      '/opt/render/project/src/backend/.puppeteer',
-      '/opt/render/project/src/.puppeteer',
-      '/opt/render/.cache/puppeteer'
-    ].filter(Boolean);
-    for (const root of cacheRoots) {
-      if (!fs.existsSync(root)) {
-        continue;
-      }
-      const found = this.findChromeExecutable(root);
-      if (found) {
-        console.log(
-          '[WhatsAppService] Chrome found:',
-          found
-        );
-        return found;
-      }
-    }
-    candidates.push(
-      '/usr/bin/google-chrome',
-      '/usr/bin/google-chrome-stable',
-      '/usr/bin/chromium',
-      '/usr/bin/chromium-browser'
-    );
-    for (const candidate of candidates) {
-      if (
-        candidate &&
-        fs.existsSync(candidate)
-      ) {
-        console.log(
-          '[WhatsAppService] Chrome found:',
-          candidate
-        );
-        return candidate;
-      }
-    }
-    throw new Error(
-      'Chrome executable not found.'
-    );
+      ''
+    ).replace(/\D/g, '');
   }
   findChromeExecutable(directory) {
     try {
-      const entries = fs.readdirSync(
-        directory,
-        {
-          withFileTypes: true
-        }
-      );
+      const entries = fs.readdirSync(directory, {
+        withFileTypes: true
+      });
       for (const entry of entries) {
         const fullPath = path.join(
           directory,
@@ -112,9 +52,7 @@ class WhatsAppService {
         }
       }
       for (const entry of entries) {
-        if (!entry.isDirectory()) {
-          continue;
-        }
+        if (!entry.isDirectory()) continue;
         if (
           entry.name === 'node_modules' ||
           entry.name === '.git'
@@ -128,12 +66,56 @@ class WhatsAppService {
               entry.name
             )
           );
-        if (result) {
-          return result;
-        }
+        if (result) return result;
       }
     } catch (_) {}
     return null;
+  }
+  getChromePath() {
+    const directPaths = [
+      process.env.CHROME_BIN,
+      process.env.PUPPETEER_EXECUTABLE_PATH,
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser'
+    ].filter(Boolean);
+    for (const chromePath of directPaths) {
+      if (fs.existsSync(chromePath)) {
+        console.log(
+          '[WhatsAppService] Chrome:',
+          chromePath
+        );
+        return chromePath;
+      }
+    }
+    const roots = [
+      process.env.PUPPETEER_CACHE_DIR,
+      path.join(process.cwd(), '.puppeteer'),
+      path.join(
+        process.cwd(),
+        'backend',
+        '.puppeteer'
+      ),
+      '/opt/render/.cache/puppeteer',
+      '/opt/render/project/src/.puppeteer',
+      '/opt/render/project/src/backend/.puppeteer'
+    ].filter(Boolean);
+    for (const root of roots) {
+      if (!fs.existsSync(root)) continue;
+      const chrome =
+        this.findChromeExecutable(root);
+      if (chrome) {
+        console.log(
+          '[WhatsAppService] Chrome:',
+          chrome
+        );
+        return chrome;
+      }
+    }
+    throw new Error(
+      'Chrome executable not found.'
+    );
   }
   async connect() {
     if (this.isReady) {
@@ -151,30 +133,21 @@ class WhatsAppService {
     }
     this.isConnecting = true;
     this.lastError = null;
-    this.qrCode = null;
     this.pairingCode = null;
     this.pairingRequested = false;
     try {
-      console.log(
-        '🔄 Starting WhatsApp using phone-number pairing...'
-      );
       const phoneNumber =
         this.getPhoneNumber();
       if (!phoneNumber) {
         throw new Error(
-          'WHATSAPP_PHONE or OWNER_NUMBER is not configured in Render environment variables.'
+          'WHATSAPP_PHONE or OWNER_NUMBER is missing.'
         );
       }
       console.log(
-        '[WhatsAppService] Pairing phone:',
-        `${phoneNumber.slice(0, 3)}******${phoneNumber.slice(-2)}`
+        '🔄 Starting WhatsApp connection...'
       );
       const chromePath =
         this.getChromePath();
-      console.log(
-        '[WhatsAppService] Using Chrome:',
-        chromePath
-      );
       this.client = new Client({
         authStrategy: new LocalAuth({
           clientId: 'wa-autobot',
@@ -203,7 +176,6 @@ class WhatsAppService {
             '--disable-hang-monitor',
             '--disable-ipc-flooding-protection',
             '--disable-popup-blocking',
-            '--disable-prompt-on-repost',
             '--disable-renderer-backgrounding',
             '--disable-sync',
             '--metrics-recording-only',
@@ -212,31 +184,27 @@ class WhatsAppService {
           ]
         }
       });
-      /*
-       * Pairing-code event.
-       */
       this.client.on(
         'code',
         (code) => {
-          console.log(
-            '🔑 WHATSAPP PAIRING CODE:',
-            code
-          );
           this.pairingCode =
             String(code);
-          this.qrCode = null;
+          console.log(
+            '🔑 WhatsApp pairing code:',
+            this.pairingCode
+          );
         }
       );
-      /*
-       * QR should not be used.
-       */
       this.client.on(
         'qr',
         () => {
+          /*
+           * QR intentionally ignored.
+           * This bot uses phone-number pairing.
+           */
           console.log(
-            'ℹ️ QR received, but QR mode is disabled. Waiting for pairing code.'
+            'ℹ️ QR received and ignored.'
           );
-          this.qrCode = null;
         }
       );
       this.client.on(
@@ -245,23 +213,7 @@ class WhatsAppService {
           console.log(
             '🔐 WhatsApp authenticated'
           );
-          this.qrCode = null;
           this.pairingCode = null;
-        }
-      );
-      this.client.on(
-        'auth_failure',
-        (message) => {
-          console.error(
-            '❌ WhatsApp authentication failure:',
-            message
-          );
-          this.isReady = false;
-          this.isConnecting = false;
-          this.qrCode = null;
-          this.pairingCode = null;
-          this.lastError =
-            String(message);
         }
       );
       this.client.on(
@@ -272,9 +224,22 @@ class WhatsAppService {
           );
           this.isReady = true;
           this.isConnecting = false;
-          this.qrCode = null;
           this.pairingCode = null;
           this.lastError = null;
+        }
+      );
+      this.client.on(
+        'auth_failure',
+        (message) => {
+          console.error(
+            '❌ WhatsApp auth failure:',
+            message
+          );
+          this.isReady = false;
+          this.isConnecting = false;
+          this.pairingCode = null;
+          this.lastError =
+            String(message);
         }
       );
       this.client.on(
@@ -286,26 +251,28 @@ class WhatsAppService {
           );
           this.isReady = false;
           this.isConnecting = false;
-          this.qrCode = null;
           this.pairingCode = null;
         }
       );
       /*
-       * EXISTING COMMAND SYSTEM
-       *
-       * Incoming WhatsApp DM
-       *        ↓
-       * commands/index.js
-       *        ↓
-       * existing .menu, .ping, .owner, etc.
+       * MAIN COMMAND HANDLER
        */
       this.client.on(
         'message',
         async (message) => {
           try {
-            console.log(
-              `📩 Message from ${message.from}: ${message.body}`
-            );
+            /*
+             * Ignore WhatsApp Status.
+             */
+            if (
+              message.from ===
+              'status@broadcast'
+            ) {
+              return;
+            }
+            /*
+             * Ignore our own messages.
+             */
             if (message.fromMe) {
               return;
             }
@@ -317,123 +284,127 @@ class WhatsAppService {
               return;
             }
             /*
-             * Your existing commands use ".".
+             * Only process bot commands.
              */
             if (!text.startsWith('.')) {
               return;
             }
             console.log(
-              `⚙️ Processing command: ${text}`
+              `📩 Command from ${message.from}: ${text}`
             );
             const context = {
               message,
               client: this.client,
               whatsapp: this,
-              chat: message.from,
               from: message.from,
+              chat: message.from,
               sender:
                 message.author ||
                 message.from,
-              reply: async (replyText) => {
+              reply: async (response) => {
                 if (
-                  replyText === undefined ||
-                  replyText === null
+                  response === undefined ||
+                  response === null
                 ) {
-                  return;
+                  return null;
                 }
-                await message.reply(
-                  String(replyText)
-                );
+                const replyText =
+                  String(response);
+                if (!replyText.trim()) {
+                  return null;
+                }
+                /*
+                 * Use message.reply first.
+                 */
+                try {
+                  return await message.reply(
+                    replyText
+                  );
+                } catch (replyError) {
+                  console.error(
+                    '[WhatsApp Reply Error]',
+                    replyError.message
+                  );
+                  /*
+                   * Fallback to direct client.sendMessage.
+                   */
+                  try {
+                    return await this.client.sendMessage(
+                      message.from,
+                      replyText
+                    );
+                  } catch (sendError) {
+                    console.error(
+                      '[WhatsApp Send Error]',
+                      sendError.message
+                    );
+                    throw sendError;
+                  }
+                }
               }
             };
-            let result;
-            if (
-              commandHandler &&
-              typeof commandHandler.execute ===
-                'function'
-            ) {
-              result =
-                await commandHandler.execute(
-                  text,
-                  context
-                );
-            } else if (
-              commandHandler &&
-              typeof commandHandler.handle ===
-                'function'
-            ) {
-              result =
-                await commandHandler.handle(
-                  text,
-                  context
-                );
-            } else if (
-              typeof commandHandler ===
-              'function'
-            ) {
-              result =
-                await commandHandler(
-                  text,
-                  context
-                );
-            } else {
-              console.error(
-                '[WhatsAppService] Existing command handler could not be loaded.'
-              );
-              return;
-            }
             /*
-             * If execute() returns text,
-             * send it to the same WhatsApp DM.
+             * Execute existing commands.
+             */
+            const result =
+              await commands.execute(
+                text,
+                context
+              );
+            /*
+             * Send returned command response.
              *
-             * If the command already used
-             * context.reply(), this won't duplicate
-             * anything unless it returned a value.
+             * IMPORTANT:
+             * commands/index.js returns the text.
              */
             if (
               result !== undefined &&
-              result !== null &&
-              String(result).trim() !== ''
+              result !== null
             ) {
-              await message.reply(
-                String(result)
-              );
+              const response =
+                String(result).trim();
+              if (response) {
+                await context.reply(
+                  response
+                );
+              }
             }
             console.log(
-              `✅ Command processed: ${text}`
+              `✅ Command completed: ${text}`
             );
           } catch (error) {
             console.error(
               '[Command Handler Error]',
               error
             );
+            /*
+             * Don't let command errors
+             * terminate the WhatsApp client.
+             */
             try {
               await message.reply(
-                '❌ An error occurred while processing that command.'
+                '❌ Something went wrong while processing that command.'
               );
             } catch (_) {}
           }
         }
       );
       /*
-       * Start WhatsApp Web.
+       * Initialize WhatsApp.
        */
       await this.client.initialize();
       /*
-       * Ask for pairing code AFTER initialization
-       * has created the WhatsApp Web page.
-       *
-       * This is the important part for 1.34.7.
+       * Request pairing code.
        */
       if (
         !this.isReady &&
         !this.pairingRequested
       ) {
         this.pairingRequested = true;
+        console.log(
+          '🔑 Requesting phone-number pairing code...'
+        );
         try {
-          console.log(
-            '🔑 Requesting WhatsApp phone-number pairing code...'
-          );
           const code =
             await this.client.requestPairingCode(
               phoneNumber,
@@ -446,15 +417,15 @@ class WhatsAppService {
             '🔑 PAIRING CODE:',
             this.pairingCode
           );
-        } catch (pairingError) {
+        } catch (error) {
           console.error(
-            '[WhatsAppService] Pairing code error:',
-            pairingError
+            '[Pairing Code Error]',
+            error
           );
           this.pairingRequested = false;
           this.lastError =
-            pairingError.message;
-          throw pairingError;
+            error.message;
+          throw error;
         }
       }
       return {
@@ -469,7 +440,6 @@ class WhatsAppService {
       );
       this.isReady = false;
       this.isConnecting = false;
-      this.qrCode = null;
       this.pairingCode = null;
       this.lastError =
         error.message;
@@ -524,10 +494,6 @@ class WhatsAppService {
   async disconnect() {
     try {
       if (!this.client) {
-        this.isReady = false;
-        this.isConnecting = false;
-        this.qrCode = null;
-        this.pairingCode = null;
         return {
           success: true,
           message:
@@ -541,12 +507,8 @@ class WhatsAppService {
       this.client = null;
       this.isReady = false;
       this.isConnecting = false;
-      this.qrCode = null;
       this.pairingCode = null;
       this.pairingRequested = false;
-      console.log(
-        '🔴 WhatsApp connection stopped'
-      );
       return {
         success: true,
         message:
@@ -560,7 +522,6 @@ class WhatsAppService {
       this.client = null;
       this.isReady = false;
       this.isConnecting = false;
-      this.qrCode = null;
       this.pairingCode = null;
       this.pairingRequested = false;
       throw error;
