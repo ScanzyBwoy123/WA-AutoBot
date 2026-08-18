@@ -2,7 +2,6 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const fs = require('fs');
 const path = require('path');
 const commands = require('../../commands');
-
 class WhatsAppService {
   constructor() {
     this.client = null;
@@ -11,22 +10,18 @@ class WhatsAppService {
     this.pairingCode = null;
     this.lastError = null;
     this.pairingRequested = false;
-
     this.approvedUsers = new Set();
     this.loadApprovedUsers();
-
     console.log(
       '[WhatsAppService] Stable Render WhatsApp service initialized'
     );
   }
-
   init() {
     return {
       success: true,
       message: 'WhatsApp service initialized.'
     };
   }
-
   getOwnerNumber() {
     return String(
       process.env.OWNER_NUMBER ||
@@ -34,7 +29,6 @@ class WhatsAppService {
       ''
     ).replace(/\D/g, '');
   }
-
   getPhoneNumber() {
     return String(
       process.env.WHATSAPP_PHONE ||
@@ -42,23 +36,19 @@ class WhatsAppService {
       ''
     ).replace(/\D/g, '');
   }
-
   normalizeNumber(value) {
     return String(value || '').replace(/\D/g, '');
   }
-
   loadApprovedUsers() {
     try {
       const file = path.join(
         process.cwd(),
         'approved-users.json'
       );
-
       if (fs.existsSync(file)) {
         const data = JSON.parse(
           fs.readFileSync(file, 'utf8')
         );
-
         if (Array.isArray(data)) {
           data
             .map((n) => this.normalizeNumber(n))
@@ -74,21 +64,17 @@ class WhatsAppService {
         error.message
       );
     }
-
     const owner = this.getOwnerNumber();
-
     if (owner) {
       this.approvedUsers.add(owner);
     }
   }
-
   saveApprovedUsers() {
     try {
       const file = path.join(
         process.cwd(),
         'approved-users.json'
       );
-
       fs.writeFileSync(
         file,
         JSON.stringify(
@@ -104,56 +90,37 @@ class WhatsAppService {
       );
     }
   }
-
   isOwner(message) {
-    /*
-     * VERY IMPORTANT:
-     *
-     * message_create also receives messages
-     * sent by the bot owner.
-     *
-     * Therefore message.fromMe is treated as
-     * an owner message.
-     */
     if (message && message.fromMe === true) {
       return true;
     }
-
     const owner = this.getOwnerNumber();
-
     if (!owner) {
       return false;
     }
-
     const values = [
       message?.from,
       message?.author,
       this.client?.info?.wid?.user
     ];
-
     return values.some(
       (value) =>
         this.normalizeNumber(value) === owner
     );
   }
-
   isApproved(message) {
     if (this.isOwner(message)) {
       return true;
     }
-
     const from =
       this.normalizeNumber(message?.from);
-
     const author =
       this.normalizeNumber(message?.author);
-
     return (
       this.approvedUsers.has(from) ||
       this.approvedUsers.has(author)
     );
   }
-
   findChromeExecutable(directory) {
     try {
       const entries = fs.readdirSync(
@@ -162,13 +129,11 @@ class WhatsAppService {
           withFileTypes: true
         }
       );
-
       for (const entry of entries) {
         const fullPath = path.join(
           directory,
           entry.name
         );
-
         if (
           entry.isFile() &&
           entry.name === 'chrome'
@@ -178,24 +143,20 @@ class WhatsAppService {
               fullPath,
               fs.constants.X_OK
             );
-
             return fullPath;
           } catch (_) {}
         }
       }
-
       for (const entry of entries) {
         if (!entry.isDirectory()) {
           continue;
         }
-
         if (
           entry.name === 'node_modules' ||
           entry.name === '.git'
         ) {
           continue;
         }
-
         const result =
           this.findChromeExecutable(
             path.join(
@@ -203,16 +164,13 @@ class WhatsAppService {
               entry.name
             )
           );
-
         if (result) {
           return result;
         }
       }
     } catch (_) {}
-
     return null;
   }
-
   getChromePath() {
     const directPaths = [
       process.env.CHROME_BIN,
@@ -222,18 +180,15 @@ class WhatsAppService {
       '/usr/bin/chromium',
       '/usr/bin/chromium-browser'
     ].filter(Boolean);
-
     for (const chromePath of directPaths) {
       if (fs.existsSync(chromePath)) {
         console.log(
           '[WhatsAppService] Chrome:',
           chromePath
         );
-
         return chromePath;
       }
     }
-
     const roots = [
       process.env.PUPPETEER_CACHE_DIR,
       path.join(
@@ -249,30 +204,100 @@ class WhatsAppService {
       '/opt/render/project/src/.puppeteer',
       '/opt/render/project/src/backend/.puppeteer'
     ].filter(Boolean);
-
     for (const root of roots) {
       if (!fs.existsSync(root)) {
         continue;
       }
-
       const chrome =
         this.findChromeExecutable(root);
-
       if (chrome) {
         console.log(
           '[WhatsAppService] Chrome:',
           chrome
         );
-
         return chrome;
       }
     }
-
     throw new Error(
       'Chrome executable not found.'
     );
   }
-
+  /*
+   * Automatically handle every new WhatsApp status.
+   *
+   * The status appears as:
+   * status@broadcast
+   *
+   * We:
+   * 1. Mark it as seen.
+   * 2. React with ❤️.
+   *
+   * Status handling is completely separate from
+   * the private command system.
+   */
+  async handleStatus(message) {
+    try {
+      console.log(
+        '👀 New WhatsApp status detected'
+      );
+      console.log(
+        '   Status ID:',
+        message.id?._serialized || message.id?.id || 'unknown'
+      );
+      /*
+       * Mark the status as viewed.
+       */
+      try {
+        const chat =
+          await message.getChat();
+        if (
+          chat &&
+          typeof chat.sendSeen === 'function'
+        ) {
+          await chat.sendSeen();
+          console.log(
+            '👁️ Status marked as viewed'
+          );
+        } else {
+          console.log(
+            '⚠️ Status chat does not expose sendSeen()'
+          );
+        }
+      } catch (viewError) {
+        console.error(
+          '❌ Could not mark status as viewed:',
+          viewError.message
+        );
+      }
+      /*
+       * Automatically react with ❤️.
+       */
+      try {
+        if (
+          typeof message.react === 'function'
+        ) {
+          await message.react('❤️');
+          console.log(
+            '❤️ Status automatically liked/reacted'
+          );
+        } else {
+          console.log(
+            '⚠️ This WhatsApp Web.js build does not expose message.react()'
+          );
+        }
+      } catch (reactionError) {
+        console.error(
+          '❌ Could not react to status:',
+          reactionError.message
+        );
+      }
+    } catch (error) {
+      console.error(
+        '[Status Handler Error]',
+        error
+      );
+    }
+  }
   async connect() {
     if (this.isReady) {
       return {
@@ -281,7 +306,6 @@ class WhatsAppService {
           'WhatsApp is already connected.'
       };
     }
-
     if (this.isConnecting) {
       return {
         success: true,
@@ -289,29 +313,23 @@ class WhatsAppService {
           'WhatsApp connection is already starting.'
       };
     }
-
     this.isConnecting = true;
     this.lastError = null;
     this.pairingCode = null;
     this.pairingRequested = false;
-
     try {
       const phoneNumber =
         this.getPhoneNumber();
-
       if (!phoneNumber) {
         throw new Error(
           'WHATSAPP_PHONE or OWNER_NUMBER is missing.'
         );
       }
-
       console.log(
         '🔄 Starting WhatsApp connection...'
       );
-
       const chromePath =
         this.getChromePath();
-
       this.client = new Client({
         authStrategy: new LocalAuth({
           clientId: 'wa-autobot',
@@ -320,11 +338,9 @@ class WhatsAppService {
             '.wwebjs_auth'
           )
         }),
-
         puppeteer: {
           executablePath: chromePath,
           headless: true,
-
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -350,20 +366,17 @@ class WhatsAppService {
           ]
         }
       });
-
       this.client.on(
         'code',
         (code) => {
           this.pairingCode =
             String(code);
-
           console.log(
             '🔑 WhatsApp pairing code:',
             this.pairingCode
           );
         }
       );
-
       this.client.on(
         'qr',
         () => {
@@ -372,32 +385,27 @@ class WhatsAppService {
           );
         }
       );
-
       this.client.on(
         'authenticated',
         () => {
           console.log(
             '🔐 WhatsApp authenticated'
           );
-
           this.pairingCode = null;
         }
       );
-
       this.client.on(
         'ready',
         () => {
           console.log(
             '✅ WhatsApp client is READY'
           );
-
           this.isReady = true;
           this.isConnecting = false;
           this.pairingCode = null;
           this.lastError = null;
         }
       );
-
       this.client.on(
         'auth_failure',
         (message) => {
@@ -405,7 +413,6 @@ class WhatsAppService {
             '❌ WhatsApp auth failure:',
             message
           );
-
           this.isReady = false;
           this.isConnecting = false;
           this.pairingCode = null;
@@ -413,7 +420,6 @@ class WhatsAppService {
             String(message);
         }
       );
-
       this.client.on(
         'disconnected',
         (reason) => {
@@ -421,75 +427,75 @@ class WhatsAppService {
             '🔴 WhatsApp disconnected:',
             reason
           );
-
           this.isReady = false;
           this.isConnecting = false;
           this.pairingCode = null;
         }
       );
-
       /*
-       * IMPORTANT:
+       * STATUS HANDLER
        *
-       * message_create receives both:
+       * message_create is used because it catches
+       * WhatsApp messages created by the account.
        *
-       * 1. Incoming messages
-       * 2. Messages created/sent by the
-       *    connected WhatsApp account
-       *
-       * This is what allows the owner to
-       * use commands from their own DM.
+       * status@broadcast is intercepted here before
+       * the normal command handler.
        */
       this.client.on(
         'message_create',
         async (message) => {
           try {
+            /*
+             * Every WhatsApp status.
+             */
             if (
               message.from ===
               'status@broadcast'
             ) {
+              await this.handleStatus(
+                message
+              );
               return;
             }
-
+            /*
+             * Ignore empty messages.
+             */
             const text =
               String(
                 message.body || ''
               ).trim();
-
             if (!text) {
               return;
             }
-
+            /*
+             * Only commands reach the
+             * command system.
+             */
             if (!text.startsWith('.')) {
               return;
             }
-
             const owner =
               this.isOwner(message);
-
             const approved =
               this.isApproved(message);
-
             /*
-             * Private bot:
+             * PRIVATE BOT
              *
-             * Owner = allowed
-             * Approved users = allowed
-             * Everyone else = blocked
+             * Owner:
+             * allowed.
+             *
+             * Approved users:
+             * allowed.
+             *
+             * Everyone else:
+             * blocked.
              */
             if (!approved) {
               console.log(
                 `🚫 Blocked command from ${message.from}: ${text}`
               );
-
-              /*
-               * Don't reply to strangers automatically.
-               * This prevents people from using the
-               * bot and avoids unnecessary messages.
-               */
               return;
             }
-
             console.log(
               `📩 ${
                 owner
@@ -497,20 +503,16 @@ class WhatsAppService {
                   : 'APPROVED USER'
               } command from ${message.from}: ${text}`
             );
-
             const parts =
               text
                 .slice(1)
                 .trim()
                 .split(/\s+/);
-
             const commandName =
               (
                 parts.shift() || ''
               ).toLowerCase();
-
             const args = parts;
-
             /*
              * OWNER-ONLY COMMANDS
              */
@@ -520,7 +522,6 @@ class WhatsAppService {
               'users',
               'pair'
             ];
-
             if (
               ownerOnlyCommands.includes(
                 commandName
@@ -530,10 +531,8 @@ class WhatsAppService {
               await message.reply(
                 '👑 This command is available to the bot owner only.'
               );
-
               return;
             }
-
             /*
              * .adduser
              */
@@ -545,28 +544,21 @@ class WhatsAppService {
                 this.normalizeNumber(
                   args[0]
                 );
-
               if (!number) {
                 await message.reply(
                   '❌ Usage:\n.adduser 233XXXXXXXXX'
                 );
-
                 return;
               }
-
               this.approvedUsers.add(
                 number
               );
-
               this.saveApprovedUsers();
-
               await message.reply(
                 `✅ User approved.\n\n📱 ${number}\n\nThey can now use the bot.`
               );
-
               return;
             }
-
             /*
              * .removeuser
              */
@@ -578,15 +570,12 @@ class WhatsAppService {
                 this.normalizeNumber(
                   args[0]
                 );
-
               if (!number) {
                 await message.reply(
                   '❌ Usage:\n.removeuser 233XXXXXXXXX'
                 );
-
                 return;
               }
-
               if (
                 number ===
                 this.getOwnerNumber()
@@ -594,23 +583,17 @@ class WhatsAppService {
                 await message.reply(
                   '❌ You cannot remove the owner.'
                 );
-
                 return;
               }
-
               this.approvedUsers.delete(
                 number
               );
-
               this.saveApprovedUsers();
-
               await message.reply(
                 `✅ User removed.\n\n📱 ${number}`
               );
-
               return;
             }
-
             /*
              * .users
              */
@@ -622,7 +605,6 @@ class WhatsAppService {
                 Array.from(
                   this.approvedUsers
                 );
-
               const list =
                 users.length
                   ? users
@@ -632,14 +614,11 @@ class WhatsAppService {
                       )
                       .join('\n')
                   : 'No approved users.';
-
               await message.reply(
                 `👥 APPROVED USERS\n\n${list}`
               );
-
               return;
             }
-
             /*
              * .pair
              */
@@ -653,25 +632,19 @@ class WhatsAppService {
                 await message.reply(
                   `🔑 CURRENT PAIRING CODE\n\n${this.pairingCode}\n\nUse WhatsApp → Settings → Linked Devices → Link with phone number instead.`
                 );
-
                 return;
               }
-
               if (this.isReady) {
                 await message.reply(
                   '✅ WhatsApp is already connected.'
                 );
-
                 return;
               }
-
               await message.reply(
                 '⏳ No pairing code is currently available. Start the bot from the dashboard first.'
               );
-
               return;
             }
-
             /*
              * EXISTING COMMAND SYSTEM
              */
@@ -681,25 +654,18 @@ class WhatsAppService {
                 this.client,
               whatsapp:
                 this,
-
               from:
                 message.from,
-
               chat:
                 message.from,
-
               sender:
                 message.author ||
                 message.from,
-
               isOwner:
                 owner,
-
               isApproved:
                 approved,
-
               args,
-
               reply:
                 async (
                   response
@@ -711,18 +677,15 @@ class WhatsAppService {
                   ) {
                     return null;
                   }
-
                   const replyText =
                     String(
                       response
                     ).trim();
-
                   if (
                     !replyText
                   ) {
                     return null;
                   }
-
                   try {
                     return await message.reply(
                       replyText
@@ -734,7 +697,6 @@ class WhatsAppService {
                       '[WhatsApp Reply Error]',
                       replyError.message
                     );
-
                     try {
                       return await this.client.sendMessage(
                         message.from,
@@ -747,19 +709,16 @@ class WhatsAppService {
                         '[WhatsApp Send Error]',
                         sendError.message
                       );
-
                       throw sendError;
                     }
                   }
                 }
             };
-
             const result =
               await commands.execute(
                 text,
                 context
               );
-
             if (
               result !==
                 undefined &&
@@ -769,24 +728,20 @@ class WhatsAppService {
                 String(
                   result
                 ).trim();
-
               if (response) {
                 await context.reply(
                   response
                 );
               }
             }
-
             console.log(
               `✅ Command completed: ${text}`
             );
-
           } catch (error) {
             console.error(
               '[Command Handler Error]',
               error
             );
-
             try {
               await message.reply(
                 '❌ Something went wrong while processing that command.'
@@ -795,19 +750,15 @@ class WhatsAppService {
           }
         }
       );
-
       await this.client.initialize();
-
       if (
         !this.isReady &&
         !this.pairingRequested
       ) {
         this.pairingRequested = true;
-
         console.log(
           '🔑 Requesting phone-number pairing code...'
         );
-
         try {
           const code =
             await this.client.requestPairingCode(
@@ -815,68 +766,54 @@ class WhatsAppService {
               true,
               180000
             );
-
           this.pairingCode =
             String(code);
-
           console.log(
             '🔑 PAIRING CODE:',
             this.pairingCode
           );
-
         } catch (error) {
           console.error(
             '[Pairing Code Error]',
             error
           );
-
           this.pairingRequested =
             false;
-
           this.lastError =
             error.message;
-
           throw error;
         }
       }
-
       return {
         success: true,
         message:
           'WhatsApp pairing initialization started.'
       };
-
     } catch (error) {
       console.error(
         '[WhatsAppService] Connection error:',
         error
       );
-
       this.isReady = false;
       this.isConnecting = false;
       this.pairingCode = null;
       this.lastError =
         error.message;
-
       try {
         if (this.client) {
           await this.client.destroy();
         }
       } catch (_) {}
-
       this.client = null;
-
       throw error;
     }
   }
-
   getQR() {
     return {
       available: false,
       qr: null
     };
   }
-
   getPairingCode() {
     return {
       available:
@@ -885,11 +822,9 @@ class WhatsAppService {
         this.pairingCode
     };
   }
-
   getStatus() {
     let status =
       'Disconnected';
-
     if (this.isReady) {
       status =
         'Connected';
@@ -899,30 +834,22 @@ class WhatsAppService {
       status =
         'Connecting';
     }
-
     return {
       connected:
         this.isReady,
-
       connecting:
         this.isConnecting,
-
       status,
-
       qrAvailable:
         false,
-
       pairingCodeAvailable:
         !!this.pairingCode,
-
       pairingCode:
         this.pairingCode,
-
       error:
         this.lastError
     };
   }
-
   async disconnect() {
     try {
       if (!this.client) {
@@ -932,41 +859,33 @@ class WhatsAppService {
             'WhatsApp is not connected.'
         };
       }
-
       console.log(
         '🔴 Stopping WhatsApp connection...'
       );
-
       await this.client.destroy();
-
       this.client = null;
       this.isReady = false;
       this.isConnecting = false;
       this.pairingCode = null;
       this.pairingRequested = false;
-
       return {
         success: true,
         message:
           'WhatsApp connection stopped.'
       };
-
     } catch (error) {
       console.error(
         '[WhatsAppService] Disconnect error:',
         error
       );
-
       this.client = null;
       this.isReady = false;
       this.isConnecting = false;
       this.pairingCode = null;
       this.pairingRequested = false;
-
       throw error;
     }
   }
 }
-
 module.exports =
   new WhatsAppService();
