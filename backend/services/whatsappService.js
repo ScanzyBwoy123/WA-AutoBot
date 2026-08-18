@@ -1,5 +1,8 @@
+
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
+const fs = require('fs');
+const path = require('path');
 
 class WhatsAppService {
   constructor() {
@@ -19,6 +22,47 @@ class WhatsAppService {
       success: true,
       message: 'WhatsApp service initialized.'
     };
+  }
+
+  /*
+   * Find the Chrome browser installed by Puppeteer.
+   */
+  getChromePath() {
+    const possiblePaths = [
+      process.env.PUPPETEER_EXECUTABLE_PATH,
+
+      process.env.CHROME_BIN,
+
+      path.join(
+        process.cwd(),
+        '.puppeteer',
+        'chrome',
+        'linux-148.0.7778.97',
+        'chrome-linux64',
+        'chrome'
+      ),
+
+      '/opt/render/project/src/backend/.puppeteer/chrome/linux-148.0.7778.97/chrome-linux64/chrome',
+
+      '/opt/render/project/src/.puppeteer/chrome/linux-148.0.7778.97/chrome-linux64/chrome',
+
+      '/opt/render/.cache/puppeteer/chrome/linux-148.0.7778.97/chrome-linux64/chrome'
+    ];
+
+    for (const chromePath of possiblePaths) {
+      if (chromePath && fs.existsSync(chromePath)) {
+        console.log(
+          '[WhatsAppService] Chrome found:',
+          chromePath
+        );
+
+        return chromePath;
+      }
+    }
+
+    throw new Error(
+      'Chrome executable not found. Checked Puppeteer and Render Chrome locations.'
+    );
   }
 
   async connect() {
@@ -42,17 +86,20 @@ class WhatsAppService {
     try {
       console.log('🔄 Starting WhatsApp connection...');
 
-      /*
-       * IMPORTANT:
-       * Puppeteer installs Chrome during npm install.
-       * Do NOT hard-code Render's Chrome cache path.
-       */
+      const chromePath = this.getChromePath();
+
+      console.log(
+        '[WhatsAppService] Using Chrome:',
+        chromePath
+      );
+
       this.client = new Client({
         authStrategy: new LocalAuth({
           dataPath: './.wwebjs_auth'
         }),
 
         puppeteer: {
+          executablePath: chromePath,
           headless: true,
 
           args: [
@@ -72,9 +119,16 @@ class WhatsAppService {
 
         try {
           this.qrDataUrl = await qrcode.toDataURL(qr);
-          console.log('✅ QR code is available at /api/bot/qr');
+
+          console.log(
+            '✅ QR code available at /api/bot/qr'
+          );
         } catch (error) {
-          console.error('[QR Error]', error);
+          console.error(
+            '[QR Error]',
+            error
+          );
+
           this.lastError = error.message;
         }
       });
@@ -86,15 +140,21 @@ class WhatsAppService {
       });
 
       this.client.on('auth_failure', (message) => {
-        console.error('❌ WhatsApp authentication failure:', message);
+        console.error(
+          '❌ WhatsApp authentication failure:',
+          message
+        );
 
         this.isReady = false;
         this.isConnecting = false;
+        this.qrDataUrl = null;
         this.lastError = message;
       });
 
       this.client.on('ready', () => {
-        console.log('✅ WhatsApp client is READY');
+        console.log(
+          '✅ WhatsApp client is READY'
+        );
 
         this.isReady = true;
         this.isConnecting = false;
@@ -103,7 +163,10 @@ class WhatsAppService {
       });
 
       this.client.on('disconnected', (reason) => {
-        console.log('🔴 WhatsApp disconnected:', reason);
+        console.log(
+          '🔴 WhatsApp disconnected:',
+          reason
+        );
 
         this.isReady = false;
         this.isConnecting = false;
@@ -120,7 +183,8 @@ class WhatsAppService {
 
       return {
         success: true,
-        message: 'WhatsApp connection initialization started.'
+        message:
+          'WhatsApp connection initialization started.'
       };
 
     } catch (error) {
@@ -178,7 +242,9 @@ class WhatsAppService {
       this.isConnecting = false;
       this.qrDataUrl = null;
 
-      console.log('🔴 WhatsApp connection stopped');
+      console.log(
+        '🔴 WhatsApp connection stopped'
+      );
 
       return {
         success: true,
