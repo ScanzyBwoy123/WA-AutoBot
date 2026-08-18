@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  >
+
+  <title>WA-AutoBot — Connect WhatsApp</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+
+      font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+      background:
+        linear-gradient(
+          135deg,
+          #111827,
+          #172554,
+          #0f172a
+        );
+
+      color: white;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 460px;
+
+      padding: 30px;
+
+      border-radius: 24px;
+
+      background:
+        rgba(255, 255, 255, 0.08);
+
+      border:
+        1px solid
+        rgba(255, 255, 255, 0.15);
+
+      backdrop-filter: blur(20px);
+
+      box-shadow:
+        0 25px 70px
+        rgba(0, 0, 0, 0.35);
+    }
+
+    .logo {
+      text-align: center;
+      font-size: 48px;
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      text-align: center;
+      margin: 0 0 8px;
+      font-size: 28px;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: #cbd5e1;
+      margin-bottom: 28px;
+      line-height: 1.5;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    input {
+      width: 100%;
+      padding: 15px;
+
+      border-radius: 12px;
+
+      border:
+        1px solid
+        rgba(255, 255, 255, 0.2);
+
+      background:
+        rgba(0, 0, 0, 0.25);
+
+      color: white;
+
+      font-size: 16px;
+
+      outline: none;
+    }
+
+    input:focus {
+      border-color: #22c55e;
+    }
+
+    button {
+      width: 100%;
+      margin-top: 18px;
+
+      padding: 15px;
+
+      border: 0;
+      border-radius: 12px;
+
+      background: #22c55e;
+      color: white;
+
+      font-size: 16px;
+      font-weight: 700;
+
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .trial {
+      margin-top: 20px;
+      padding: 15px;
+
+      border-radius: 12px;
+
+      background:
+        rgba(34, 197, 94, 0.12);
+
+      border:
+        1px solid
+        rgba(34, 197, 94, 0.3);
+
+      text-align: center;
+      color: #bbf7d0;
+    }
+
+    .result {
+      display: none;
+
+      margin-top: 22px;
+      padding: 20px;
+
+      border-radius: 16px;
+
+      background:
+        rgba(0, 0, 0, 0.25);
+
+      text-align: center;
+    }
+
+    .code {
+      margin: 15px 0;
+
+      padding: 18px;
+
+      border-radius: 12px;
+
+      background: #020617;
+
+      font-size: 30px;
+      font-weight: 800;
+
+      letter-spacing: 5px;
+
+      color: #4ade80;
+    }
+
+    .message {
+      margin-top: 15px;
+      color: #cbd5e1;
+      line-height: 1.5;
+    }
+
+    .error {
+      color: #fca5a5;
+    }
+
+    .success {
+      color: #86efac;
+    }
+
+    .small {
+      margin-top: 18px;
+
+      text-align: center;
+
+      font-size: 13px;
+
+      color: #94a3b8;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="card">
+
+    <div class="logo">
+      🤖
+    </div>
+
+    <h1>
+      WA-AutoBot
+    </h1>
+
+    <div class="subtitle">
+      Connect your WhatsApp account
+      and try WA-AutoBot free for
+      48 hours.
+    </div>
+
+    <form id="pairForm">
+
+      <label for="phone">
+        WhatsApp phone number
+      </label>
+
+      <input
+        id="phone"
+        type="tel"
+        placeholder="+233XXXXXXXXX"
+        autocomplete="tel"
+        required
+      >
+
+      <button
+        id="continueBtn"
+        type="submit"
+      >
+        Start Free Trial
+      </button>
+
+    </form>
+
+    <div class="trial">
+      🎁 48-hour free trial
+      <br>
+      No payment required to start.
+    </div>
+
+    <div
+      id="result"
+      class="result"
+    ></div>
+
+    <div class="small">
+      Your WhatsApp account will be
+      connected only after you approve
+      the pairing process.
+    </div>
+
+  </div>
+
+<script>
+  const form =
+    document.getElementById('pairForm');
+
+  const phoneInput =
+    document.getElementById('phone');
+
+  const button =
+    document.getElementById('continueBtn');
+
+  const result =
+    document.getElementById('result');
+
+  form.addEventListener(
+    'submit',
+    async (event) => {
+
+      event.preventDefault();
+
+      const phone =
+        phoneInput.value.trim();
+
+      if (!phone) {
+        return;
+      }
+
+      button.disabled = true;
+
+      button.textContent =
+        'Creating your trial...';
+
+      result.style.display =
+        'none';
+
+      try {
+
+        const response =
+          await fetch(
+            '/api/pair/register',
+            {
+              method: 'POST',
+
+              headers: {
+                'Content-Type':
+                  'application/json'
+              },
+
+              body: JSON.stringify({
+                phone
+              })
+            }
+          );
+
+        const data =
+          await response.json();
+
+        if (!response.ok ||
+            !data.success) {
+
+          throw new Error(
+            data.message ||
+            'Unable to create trial.'
+          );
+        }
+
+        const account =
+          data.data;
+
+        result.style.display =
+          'block';
+
+        result.innerHTML = `
+          <div class="success">
+            ✅ Trial account ready
+          </div>
+
+          <div class="message">
+            WhatsApp number:
+            <strong>
+              ${account.phone}
+            </strong>
+          </div>
+
+          <div class="message">
+            Your 48-hour trial has started.
+          </div>
+
+          <div class="message">
+            The WhatsApp pairing step will
+            appear here in the next stage.
+          </div>
+        `;
+
+      } catch (error) {
+
+        result.style.display =
+          'block';
+
+        result.innerHTML = `
+          <div class="error">
+            ❌ ${error.message}
+          </div>
+        `;
+
+      } finally {
+
+        button.disabled = false;
+
+        button.textContent =
+          'Start Free Trial';
+      }
+    }
+  );
+</script>
+
+</body>
+</html>
