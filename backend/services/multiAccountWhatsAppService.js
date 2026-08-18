@@ -1,1173 +1,232 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const fs = require('fs');
-const path = require('path');
+/*
+ * ------------------------------------------------
+ * AUTOMATIC STATUS VIEW + REACTION
+ * ------------------------------------------------
+ */
 
-const multiAccountService =
-  require('./multiAccountService');
+async markStatusAsSeen(client, message, phone) {
+  const methods = [
+    async () => {
+      if (typeof client.sendSeen !== 'function') {
+        throw new Error('client.sendSeen() unavailable');
+      }
 
-class MultiAccountWhatsAppService {
-  constructor() {
-    this.clients = new Map();
-    this.connecting = new Set();
-    this.pairingCodes = new Map();
-    this.errors = new Map();
+      return await client.sendSeen(
+        'status@broadcast'
+      );
+    },
 
-    this.sessionsDir = path.join(
-      process.cwd(),
-      '.wwebjs_multi_accounts'
-    );
+    async () => {
+      const chat =
+        await message.getChat();
 
-    /*
-     * Check accounts every 60 seconds.
-     */
-    this.expiryCheckInterval = null;
-
-    this.ensureSessionDirectory();
-
-    console.log(
-      '[MultiAccountWhatsApp] Multi-account engine initialized'
-    );
-
-    /*
-     * Start automatic trial/subscription
-     * monitoring.
-     */
-    this.startExpiryMonitor();
-  }
-
-  /*
-   * --------------------------------------------------
-   * STORAGE / DIRECTORIES
-   * --------------------------------------------------
-   */
-
-  ensureSessionDirectory() {
-    if (!fs.existsSync(this.sessionsDir)) {
-      fs.mkdirSync(this.sessionsDir, {
-        recursive: true
-      });
-    }
-  }
-
-  normalizeNumber(number) {
-    return String(number || '')
-      .replace(/\D/g, '');
-  }
-
-  getSessionId(phone) {
-    return `customer-${this.normalizeNumber(phone)}`;
-  }
-
-  getSessionPath(phone) {
-    return path.join(
-      this.sessionsDir,
-      this.getSessionId(phone)
-    );
-  }
-
-  /*
-   * --------------------------------------------------
-   * CHROME
-   * --------------------------------------------------
-   */
-
-  getChromePath() {
-    const directPaths = [
-      process.env.CHROME_BIN,
-      process.env.PUPPETEER_EXECUTABLE_PATH,
-      '/usr/bin/google-chrome',
-      '/usr/bin/google-chrome-stable',
-      '/usr/bin/chromium',
-      '/usr/bin/chromium-browser'
-    ].filter(Boolean);
-
-    for (const chromePath of directPaths) {
-      if (fs.existsSync(chromePath)) {
-        console.log(
-          '[MultiAccountWhatsApp] Chrome:',
-          chromePath
+      if (
+        !chat ||
+        typeof chat.sendSeen !== 'function'
+      ) {
+        throw new Error(
+          'status chat sendSeen() unavailable'
         );
-
-        return chromePath;
       }
+
+      return await chat.sendSeen();
     }
+  ];
 
-    const roots = [
-      process.env.PUPPETEER_CACHE_DIR,
-      path.join(
-        process.cwd(),
-        '.puppeteer'
-      ),
-      path.join(
-        process.cwd(),
-        'backend',
-        '.puppeteer'
-      ),
-      '/opt/render/.cache/puppeteer',
-      '/opt/render/project/src/.puppeteer',
-      '/opt/render/project/src/backend/.puppeteer'
-    ].filter(Boolean);
+  let lastError = null;
 
-    const findChrome = (directory) => {
-      try {
-        const entries =
-          fs.readdirSync(
-            directory,
-            {
-              withFileTypes: true
-            }
-          );
+  for (let i = 0; i < methods.length; i++) {
+    try {
+      const result =
+        await methods[i]();
 
-        for (const entry of entries) {
-          const fullPath =
-            path.join(
-              directory,
-              entry.name
-            );
+      console.log(
+        `👁️ Status seen request accepted for ${phone} using method ${i + 1}`
+      );
 
-          if (
-            entry.isFile() &&
-            entry.name === 'chrome'
-          ) {
-            try {
-              fs.accessSync(
-                fullPath,
-                fs.constants.X_OK
-              );
+      return {
+        success: true,
+        result
+      };
+    } catch (error) {
+      lastError = error;
 
-              return fullPath;
-            } catch (_) {}
-          }
-        }
-
-        for (const entry of entries) {
-          if (!entry.isDirectory()) {
-            continue;
-          }
-
-          if (
-            entry.name === 'node_modules' ||
-            entry.name === '.git'
-          ) {
-            continue;
-          }
-
-          const result =
-            findChrome(
-              path.join(
-                directory,
-                entry.name
-              )
-            );
-
-          if (result) {
-            return result;
-          }
-        }
-      } catch (_) {}
-
-      return null;
-    };
-
-    for (const root of roots) {
-      if (!fs.existsSync(root)) {
-        continue;
-      }
-
-      const chrome =
-        findChrome(root);
-
-      if (chrome) {
-        console.log(
-          '[MultiAccountWhatsApp] Chrome:',
-          chrome
-        );
-
-        return chrome;
-      }
+      console.error(
+        `⚠️ Status view method ${i + 1} failed for ${phone}:`,
+        error.message
+      );
     }
-
-    throw new Error(
-      'Chrome executable not found.'
-    );
   }
 
-  /*
-   * --------------------------------------------------
-   * AUTOMATIC EXPIRY MONITOR
-   * --------------------------------------------------
-   */
+  throw (
+    lastError ||
+    new Error(
+      'Unable to mark WhatsApp status as seen.'
+    )
+  );
+}
 
-  startExpiryMonitor() {
-    if (this.expiryCheckInterval) {
+
+async handleStatus(
+  client,
+  message,
+  phone
+) {
+  try {
+    if (
+      message.from !==
+      'status@broadcast'
+    ) {
       return;
     }
 
     console.log(
-      '⏱️ Starting automatic account expiry monitor...'
+      `👀 New WhatsApp status detected for customer ${phone}`
     );
 
     /*
-     * Run immediately.
+     * Wait briefly for WhatsApp Web
+     * to finish processing the status.
      */
-    this.checkExpiredAccounts();
+    await new Promise(
+      (resolve) =>
+        setTimeout(resolve, 500)
+    );
 
     /*
-     * Then check every 60 seconds.
+     * Try to mark the ACTUAL status
+     * broadcast as seen.
      */
-    this.expiryCheckInterval =
-      setInterval(
-        () => {
-          this.checkExpiredAccounts();
-        },
-        60 * 1000
+    let viewed = false;
+
+    for (
+      let attempt = 1;
+      attempt <= 3 && !viewed;
+      attempt++
+    ) {
+      try {
+        await this.markStatusAsSeen(
+          client,
+          message,
+          phone
+        );
+
+        viewed = true;
+
+        console.log(
+          `✅ WhatsApp accepted status view for ${phone}`
+        );
+      } catch (error) {
+        console.error(
+          `❌ Status view attempt ${attempt} failed for ${phone}:`,
+          error.message
+        );
+
+        if (attempt < 3) {
+          await new Promise(
+            (resolve) =>
+              setTimeout(
+                resolve,
+                1200
+              )
+          );
+        }
+      }
+    }
+
+    if (!viewed) {
+      console.error(
+        `❌ Could not get WhatsApp to accept the status view for ${phone}`
       );
 
-    /*
-     * Do not keep Node alive solely
-     * because of this timer.
-     */
-    if (
-      this.expiryCheckInterval &&
-      typeof this.expiryCheckInterval.unref ===
-        'function'
-    ) {
-      this.expiryCheckInterval.unref();
+      return;
     }
-  }
 
-  async checkExpiredAccounts() {
+    /*
+     * Give WhatsApp time to process
+     * the view before reacting.
+     */
+    await new Promise(
+      (resolve) =>
+        setTimeout(resolve, 700)
+    );
+
+    /*
+     * React with ❤️.
+     */
     try {
-      const accounts =
-        multiAccountService.getAllAccounts();
+      if (
+        typeof message.react !==
+        'function'
+      ) {
+        console.error(
+          `❌ message.react() is unavailable for ${phone}`
+        );
 
-      if (!Array.isArray(accounts)) {
         return;
       }
 
-      for (const account of accounts) {
-        if (!account || !account.phone) {
-          continue;
-        }
-
-        const phone =
-          this.normalizeNumber(
-            account.phone
-          );
-
-        if (!phone) {
-          continue;
-        }
-
-        /*
-         * Only check active trial/paid accounts.
-         */
-        if (
-          account.status !== 'trial' &&
-          account.status !== 'paid'
-        ) {
-          continue;
-        }
-
-        const status =
-          multiAccountService.checkAccount(
-            phone
-          );
-
-        /*
-         * Account has expired.
-         */
-        if (
-          status &&
-          status.expired
-        ) {
-          console.log(
-            `⛔ Expiry detected for ${phone}: ${status.reason}`
-          );
-
-          await this.expireAccount(
-            phone,
-            status.reason
-          );
-        }
-      }
-    } catch (error) {
-      console.error(
-        '[Expiry Monitor] Error:',
-        error.message
-      );
-    }
-  }
-
-  /*
-   * --------------------------------------------------
-   * START CUSTOMER ACCOUNT
-   * --------------------------------------------------
-   */
-
-  async startAccount(phone) {
-    const normalized =
-      this.normalizeNumber(phone);
-
-    if (!normalized) {
-      throw new Error(
-        'Phone number is required.'
-      );
-    }
-
-    /*
-     * Check trial/subscription status.
-     */
-    const accountCheck =
-      multiAccountService.checkAccount(
-        normalized
-      );
-
-    if (!accountCheck.exists) {
-      throw new Error(
-        'Account has not been registered.'
-      );
-    }
-
-    if (!accountCheck.active) {
-      throw new Error(
-        accountCheck.reason ===
-          'TRIAL_EXPIRED'
-          ? 'Your 48-hour free trial has expired. Please subscribe to continue.'
-          : 'Your trial or subscription has expired. Please subscribe to continue.'
-      );
-    }
-
-    /*
-     * Already connected.
-     */
-    const existing =
-      this.clients.get(
-        normalized
-      );
-
-    if (existing) {
-      const existingInfo =
-        existing.info;
-
-      if (existingInfo) {
-        multiAccountService.setConnected(
-          normalized,
-          true
-        );
-
-        return {
-          success: true,
-          message:
-            'WhatsApp account is already connected.'
-        };
-      }
-    }
-
-    /*
-     * Prevent duplicate startup.
-     */
-    if (
-      this.connecting.has(
-        normalized
-      )
-    ) {
-      return {
-        success: true,
-        message:
-          'WhatsApp account is already connecting.'
-      };
-    }
-
-    this.connecting.add(
-      normalized
-    );
-
-    this.errors.delete(
-      normalized
-    );
-
-    this.pairingCodes.delete(
-      normalized
-    );
-
-    try {
-      const chromePath =
-        this.getChromePath();
+      await message.react('❤️');
 
       console.log(
-        `🔄 Starting customer WhatsApp account: ${normalized}`
+        `❤️ WhatsApp accepted status reaction for ${phone}`
       );
-
-      const client =
-        new Client({
-          authStrategy:
-            new LocalAuth({
-              clientId:
-                this.getSessionId(
-                  normalized
-                ),
-
-              dataPath:
-                this.sessionsDir
-            }),
-
-          puppeteer: {
-            executablePath:
-              chromePath,
-
-            headless: true,
-
-            args: [
-              '--no-sandbox',
-              '--disable-setuid-sandbox',
-              '--disable-dev-shm-usage',
-              '--disable-gpu',
-              '--no-first-run',
-              '--no-zygote',
-              '--disable-extensions',
-              '--disable-background-networking',
-              '--disable-background-timer-throttling',
-              '--disable-backgrounding-occluded-windows',
-              '--disable-breakpad',
-              '--disable-component-extensions-with-background-pages',
-              '--disable-features=Translate,BackForwardCache',
-              '--disable-hang-monitor',
-              '--disable-ipc-flooding-protection',
-              '--disable-popup-blocking',
-              '--disable-renderer-backgrounding',
-              '--disable-sync',
-              '--metrics-recording-only',
-              '--mute-audio',
-              '--js-flags=--max-old-space-size=256'
-            ]
-          }
-        });
-
-      this.clients.set(
-        normalized,
-        client
-      );
-
-      /*
-       * ------------------------------------------------
-       * PAIRING CODE
-       * ------------------------------------------------
-       */
-
-      client.on(
-        'code',
-        (code) => {
-          const pairingCode =
-            String(code);
-
-          this.pairingCodes.set(
-            normalized,
-            pairingCode
-          );
-
-          multiAccountService.setPairingCode(
-            normalized,
-            pairingCode
-          );
-
-          console.log(
-            `🔑 Pairing code for ${normalized}: ${pairingCode}`
-          );
-        }
-      );
-
-      /*
-       * Ignore QR.
-       */
-      client.on(
-        'qr',
-        () => {
-          console.log(
-            `ℹ️ QR received for ${normalized}; phone-number pairing is being used.`
-          );
-        }
-      );
-
-      /*
-       * ------------------------------------------------
-       * AUTHENTICATED
-       * ------------------------------------------------
-       */
-
-      client.on(
-        'authenticated',
-        () => {
-          console.log(
-            `🔐 Customer authenticated: ${normalized}`
-          );
-
-          this.pairingCodes.delete(
-            normalized
-          );
-
-          multiAccountService.clearPairingCode(
-            normalized
-          );
-        }
-      );
-
-      /*
-       * ------------------------------------------------
-       * READY
-       * ------------------------------------------------
-       */
-
-      client.on(
-        'ready',
-        () => {
-          console.log(
-            `✅ Customer WhatsApp READY: ${normalized}`
-          );
-
-          this.connecting.delete(
-            normalized
-          );
-
-          this.pairingCodes.delete(
-            normalized
-          );
-
-          this.errors.delete(
-            normalized
-          );
-
-          /*
-           * Check one more time before marking
-           * the account connected.
-           */
-          const access =
-            multiAccountService.getAccountAccess(
-              normalized
-            );
-
-          if (!access.allowed) {
-            console.log(
-              `⛔ ${normalized} is no longer allowed to connect.`
-            );
-
-            this.expireAccount(
-              normalized,
-              access.reason
-            );
-
-            return;
-          }
-
-          multiAccountService.setConnected(
-            normalized,
-            true
-          );
-
-          multiAccountService.clearPairingCode(
-            normalized
-          );
-        }
-      );
-
-      /*
-       * ------------------------------------------------
-       * AUTH FAILURE
-       * ------------------------------------------------
-       */
-
-      client.on(
-        'auth_failure',
-        (message) => {
-          console.error(
-            `❌ Authentication failure for ${normalized}:`,
-            message
-          );
-
-          this.connecting.delete(
-            normalized
-          );
-
-          this.pairingCodes.delete(
-            normalized
-          );
-
-          this.errors.set(
-            normalized,
-            String(message)
-          );
-
-          multiAccountService.setConnected(
-            normalized,
-            false
-          );
-
-          multiAccountService.clearPairingCode(
-            normalized
-          );
-        }
-      );
-
-      /*
-       * ------------------------------------------------
-       * DISCONNECTED
-       * ------------------------------------------------
-       */
-
-      client.on(
-        'disconnected',
-        (reason) => {
-          console.log(
-            `🔴 Customer WhatsApp disconnected: ${normalized}`,
-            reason
-          );
-
-          this.connecting.delete(
-            normalized
-          );
-
-          this.pairingCodes.delete(
-            normalized
-          );
-
-          this.errors.set(
-            normalized,
-            String(
-              reason ||
-              'Disconnected'
-            )
-          );
-
-          multiAccountService.setConnected(
-            normalized,
-            false
-          );
-
-          multiAccountService.clearPairingCode(
-            normalized
-          );
-
-          this.clients.delete(
-            normalized
-          );
-        }
-      );
-
-      /*
-       * ------------------------------------------------
-       * AUTOMATIC STATUS VIEW + REACTION
-       * ------------------------------------------------
-       */
-
-      client.on(
-        'message_create',
-        async (message) => {
-          try {
-            /*
-             * Only statuses.
-             */
-            if (
-              message.from !==
-              'status@broadcast'
-            ) {
-              return;
-            }
-
-            /*
-             * Make sure this customer is
-             * still active.
-             */
-            const access =
-              multiAccountService.getAccountAccess(
-                normalized
-              );
-
-            if (!access.allowed) {
-              console.log(
-                `⛔ Ignoring status because ${normalized} is expired.`
-              );
-
-              return;
-            }
-
-            console.log(
-              `👀 New WhatsApp status for customer ${normalized}`
-            );
-
-            /*
-             * VIEW STATUS
-             */
-            try {
-              const chat =
-                await message.getChat();
-
-              if (
-                chat &&
-                typeof chat.sendSeen ===
-                  'function'
-              ) {
-                await chat.sendSeen();
-
-                console.log(
-                  `👁️ Status viewed for ${normalized}`
-                );
-              } else {
-                console.log(
-                  `⚠️ sendSeen() unavailable for ${normalized}`
-                );
-              }
-            } catch (error) {
-              console.error(
-                `❌ Status view error for ${normalized}:`,
-                error.message
-              );
-            }
-
-            /*
-             * REACT WITH ❤️
-             */
-            try {
-              if (
-                typeof message.react ===
-                  'function'
-              ) {
-                await message.react(
-                  '❤️'
-                );
-
-                console.log(
-                  `❤️ Status reaction sent for ${normalized}`
-                );
-              } else {
-                console.log(
-                  `⚠️ message.react() unavailable for ${normalized}`
-                );
-              }
-            } catch (error) {
-              console.error(
-                `❌ Status reaction error for ${normalized}:`,
-                error.message
-              );
-            }
-          } catch (error) {
-            console.error(
-              '[Customer Status Handler Error]',
-              error
-            );
-          }
-        }
-      );
-
-      /*
-       * ------------------------------------------------
-       * INITIALIZE WHATSAPP
-       * ------------------------------------------------
-       */
-
-      await client.initialize();
-
-      /*
-       * Request phone-number pairing code
-       * when needed.
-       */
-      if (
-        !client.info &&
-        !this.pairingCodes.has(
-          normalized
-        )
-      ) {
-        /*
-         * Check account again before
-         * generating a pairing code.
-         */
-        const access =
-          multiAccountService.getAccountAccess(
-            normalized
-          );
-
-        if (!access.allowed) {
-          await this.expireAccount(
-            normalized,
-            access.reason
-          );
-
-          throw new Error(
-            'Account is no longer active.'
-          );
-        }
-
-        console.log(
-          `🔑 Requesting pairing code for ${normalized}...`
-        );
-
-        try {
-          const code =
-            await client.requestPairingCode(
-              normalized,
-              true,
-              180000
-            );
-
-          const pairingCode =
-            String(code);
-
-          this.pairingCodes.set(
-            normalized,
-            pairingCode
-          );
-
-          multiAccountService.setPairingCode(
-            normalized,
-            pairingCode
-          );
-
-          console.log(
-            `🔑 PAIRING CODE FOR ${normalized}: ${pairingCode}`
-          );
-        } catch (error) {
-          console.error(
-            `❌ Pairing code error for ${normalized}:`,
-            error
-          );
-
-          this.errors.set(
-            normalized,
-            error.message
-          );
-
-          this.connecting.delete(
-            normalized
-          );
-
-          throw error;
-        }
-      }
-
-      return {
-        success: true,
-        message:
-          'WhatsApp pairing initialization started.'
-      };
     } catch (error) {
       console.error(
-        `[MultiAccountWhatsApp] Connection error for ${normalized}:`,
-        error
-      );
-
-      this.connecting.delete(
-        normalized
-      );
-
-      this.errors.set(
-        normalized,
-        error.message
-      );
-
-      multiAccountService.setConnected(
-        normalized,
-        false
-      );
-
-      try {
-        const client =
-          this.clients.get(
-            normalized
-          );
-
-        if (client) {
-          await client.destroy();
-        }
-      } catch (_) {}
-
-      this.clients.delete(
-        normalized
-      );
-
-      this.pairingCodes.delete(
-        normalized
-      );
-
-      throw error;
-    }
-  }
-
-  /*
-   * --------------------------------------------------
-   * PAIRING CODE
-   * --------------------------------------------------
-   */
-
-  getPairingCode(phone) {
-    const normalized =
-      this.normalizeNumber(phone);
-
-    const code =
-      this.pairingCodes.get(
-        normalized
-      ) || null;
-
-    return {
-      available:
-        Boolean(code),
-
-      pairingCode:
-        code
-    };
-  }
-
-  /*
-   * --------------------------------------------------
-   * STATUS
-   * --------------------------------------------------
-   */
-
-  getStatus(phone) {
-    const normalized =
-      this.normalizeNumber(phone);
-
-    const client =
-      this.clients.get(
-        normalized
-      );
-
-    const account =
-      multiAccountService.getAccount(
-        normalized
-      );
-
-    const pairing =
-      this.getPairingCode(
-        normalized
-      );
-
-    let status =
-      'Disconnected';
-
-    if (
-      account &&
-      account.status ===
-        'expired'
-    ) {
-      status =
-        'Expired';
-    } else if (
-      client &&
-      client.info
-    ) {
-      status =
-        'Connected';
-    } else if (
-      this.connecting.has(
-        normalized
-      )
-    ) {
-      status =
-        'Connecting';
-    }
-
-    return {
-      connected:
-        status ===
-        'Connected',
-
-      connecting:
-        status ===
-        'Connecting',
-
-      status,
-
-      pairingCodeAvailable:
-        pairing.available,
-
-      pairingCode:
-        pairing.pairingCode,
-
-      error:
-        this.errors.get(
-          normalized
-        ) || null
-    };
-  }
-
-  /*
-   * --------------------------------------------------
-   * DISCONNECT
-   * --------------------------------------------------
-   */
-
-  async disconnectAccount(
-    phone
-  ) {
-    const normalized =
-      this.normalizeNumber(phone);
-
-    const client =
-      this.clients.get(
-        normalized
-      );
-
-    if (!client) {
-      multiAccountService.setConnected(
-        normalized,
-        false
-      );
-
-      this.connecting.delete(
-        normalized
-      );
-
-      this.pairingCodes.delete(
-        normalized
-      );
-
-      return {
-        success: true,
-        message:
-          'Account is already disconnected.'
-      };
-    }
-
-    try {
-      console.log(
-        `🔴 Disconnecting customer account: ${normalized}`
-      );
-
-      await client.destroy();
-    } catch (error) {
-      console.error(
-        `[MultiAccountWhatsApp] Disconnect error for ${normalized}:`,
+        `❌ Status reaction failed for ${phone}:`,
         error.message
       );
     }
 
-    this.clients.delete(
-      normalized
+  } catch (error) {
+    console.error(
+      `[Customer Status Handler Error] ${phone}:`,
+      error
     );
-
-    this.connecting.delete(
-      normalized
-    );
-
-    this.pairingCodes.delete(
-      normalized
-    );
-
-    this.errors.delete(
-      normalized
-    );
-
-    multiAccountService.setConnected(
-      normalized,
-      false
-    );
-
-    multiAccountService.clearPairingCode(
-      normalized
-    );
-
-    return {
-      success: true,
-      message:
-        'WhatsApp account disconnected.'
-    };
-  }
-
-  /*
-   * --------------------------------------------------
-   * EXPIRE + DISCONNECT
-   * --------------------------------------------------
-   */
-
-  async expireAccount(
-    phone,
-    reason
-  ) {
-    const normalized =
-      this.normalizeNumber(phone);
-
-    console.log(
-      `⛔ Expiring customer account ${normalized}: ${
-        reason || 'EXPIRED'
-      }`
-    );
-
-    /*
-     * Disconnect WhatsApp first.
-     */
-    await this.disconnectAccount(
-      normalized
-    );
-
-    /*
-     * Then mark the account expired.
-     */
-    multiAccountService.expireAccount(
-      normalized
-    );
-
-    /*
-     * Make sure the pairing code is gone.
-     */
-    this.pairingCodes.delete(
-      normalized
-    );
-
-    this.connecting.delete(
-      normalized
-    );
-
-    this.errors.delete(
-      normalized
-    );
-
-    return {
-      success: true,
-
-      message:
-        'Account expired and WhatsApp disconnected.',
-
-      phone:
-        normalized,
-
-      reason:
-        reason || 'EXPIRED'
-    };
-  }
-
-  /*
-   * --------------------------------------------------
-   * CONNECTED ACCOUNTS
-   * --------------------------------------------------
-   */
-
-  getConnectedAccounts() {
-    return Array.from(
-      this.clients.keys()
-    );
-  }
-
-  /*
-   * --------------------------------------------------
-   * STATISTICS
-   * --------------------------------------------------
-   */
-
-  getStats() {
-    return {
-      activeConnections:
-        this.clients.size,
-
-      connecting:
-        this.connecting.size,
-
-      pairingCodes:
-        this.pairingCodes.size,
-
-      errors:
-        this.errors.size
-    };
   }
 }
 
-module.exports =
-  new MultiAccountWhatsAppService();
+
+/*
+ * Listen for new WhatsApp statuses.
+ */
+client.on(
+  'message_create',
+  async (message) => {
+    try {
+      if (
+        message.from !==
+        'status@broadcast'
+      ) {
+        return;
+      }
+
+      const access =
+        this.getAccountAccess(
+          normalized
+        );
+
+      if (
+        !access.allowed
+      ) {
+        console.log(
+          `⛔ Ignoring status for inactive account ${normalized}`
+        );
+
+        return;
+      }
+
+      await this.handleStatus(
+        client,
+        message,
+        normalized
+      );
+
+    } catch (error) {
+      console.error(
+        `[Status Monitor Error] ${normalized}:`,
+        error.message
+      );
+    }
+  }
+);
