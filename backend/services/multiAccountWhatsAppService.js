@@ -11,6 +11,7 @@ class MultiAccountWhatsAppService {
     this.connecting = new Set();
     this.pairingCodes = new Map();
     this.errors = new Map();
+    this.statusMonitor = null;
     this.sessionsDir = path.join(
       process.cwd(),
       '.wwebjs_multi_accounts'
@@ -36,8 +37,7 @@ class MultiAccountWhatsAppService {
     }
   }
   normalizeNumber(number) {
-    return String(number || '')
-      .replace(/\D/g, '');
+    return String(number || '').replace(/\D/g, '');
   }
   getSessionId(phone) {
     return `customer-${this.normalizeNumber(phone)}`;
@@ -132,399 +132,6 @@ class MultiAccountWhatsAppService {
       'Chrome executable not found.'
     );
   }
-  startExpiryMonitor() {
-    console.log(
-      '⏱️ Starting automatic account expiry monitor...'
-    );
-    setInterval(
-      async () => {
-        try {
-          const accounts =
-            multiAccountService.getAllAccounts();
-          for (const account of accounts) {
-            if (
-              !account ||
-              !account.phone
-            ) {
-              continue;
-            }
-            const phone =
-              this.normalizeNumber(
-                account.phone
-              );
-            const checked =
-              multiAccountService.checkAccount(
-                phone
-              );
-            if (
-              checked.exists &&
-              !checked.active &&
-              account.status !== 'expired'
-            ) {
-              console.log(
-                `⛔ Expiring WhatsApp account: ${phone}`
-              );
-              try {
-                await this.disconnectAccount(
-                  phone
-                );
-              } catch (_) {}
-              multiAccountService.expireAccount(
-                phone
-              );
-            }
-          }
-        } catch (error) {
-          console.error(
-            '[Expiry Monitor Error]',
-            error.message
-          );
-        }
-      },
-      60 * 1000
-    );
-  }
-  /*
-   * Handle customer commands.
-   *
-   * Supported examples:
-   *
-   * .menu
-   * .start
-   * .boot
-   * .status
-   *
-   * We also accept commands without the dot:
-   *
-   * menu
-   * start
-   * boot
-   * status
-   *
-   * This makes the bot compatible with the
-   * previous command system.
-   */
-  async handleCommand(
-    client,
-    message,
-    phone
-  ) {
-    try {
-      const rawText =
-        String(
-          message.body || ''
-        ).trim();
-      if (!rawText) {
-        return;
-      }
-      /*
-       * Ignore WhatsApp system messages.
-       */
-      if (
-        message.from ===
-        'status@broadcast'
-      ) {
-        return;
-      }
-      /*
-       * Only process messages that are
-       * intended to be commands.
-       *
-       * We support both:
-       *
-       * .menu
-       * menu
-       *
-       * but we don't treat arbitrary
-       * sentences as commands.
-       */
-      const withoutDot =
-        rawText.startsWith('.')
-          ? rawText.slice(1).trim()
-          : rawText;
-      const parts =
-        withoutDot
-          .split(/\s+/)
-          .filter(Boolean);
-      if (!parts.length) {
-        return;
-      }
-      const commandName =
-        String(
-          parts[0] || ''
-        ).toLowerCase();
-      const knownCommands = [
-        'menu',
-        'start',
-        'boot',
-        'status',
-        'help',
-        'ping',
-        'info',
-        'commands',
-        'stop',
-        'restart',
-        'settings',
-        'pair',
-        'users',
-        'adduser',
-        'removeuser'
-      ];
-      /*
-       * If the command system has a command
-       * not listed above, still allow it when
-       * the user explicitly uses the dot.
-       */
-      const explicitlyCommand =
-        rawText.startsWith('.');
-      if (
-        !explicitlyCommand &&
-        !knownCommands.includes(
-          commandName
-        )
-      ) {
-        return;
-      }
-      const args =
-        parts.slice(1);
-      console.log(
-        `📩 Customer command [${phone}]: ${rawText}`
-      );
-      const reply = async (
-        response
-      ) => {
-        if (
-          response === undefined ||
-          response === null
-        ) {
-          return null;
-        }
-        const text =
-          String(response).trim();
-        if (!text) {
-          return null;
-        }
-        try {
-          return await message.reply(
-            text
-          );
-        } catch (replyError) {
-          console.error(
-            `[Command Reply Error] ${phone}:`,
-            replyError.message
-          );
-          try {
-            return await client.sendMessage(
-              message.from,
-              text
-            );
-          } catch (sendError) {
-            console.error(
-              `[Command Send Error] ${phone}:`,
-              sendError.message
-            );
-            throw sendError;
-          }
-        }
-      };
-      const context = {
-        message,
-        client,
-        whatsapp: this,
-        from:
-          message.from,
-        chat:
-          message.from,
-        sender:
-          message.author ||
-          message.from,
-        isOwner:
-          Boolean(
-            message.fromMe
-          ),
-        isApproved:
-          true,
-        args,
-        reply
-      };
-      /*
-       * Send the command into the
-       * existing command system.
-       */
-      let result;
-      try {
-        result =
-          await commands.execute(
-            rawText.startsWith('.')
-              ? rawText
-              : `.${rawText}`,
-            context
-          );
-      } catch (executeError) {
-        console.error(
-          `[Command Execute Error] ${phone}:`,
-          executeError
-        );
-        /*
-         * Some command systems expect
-         * the command without a dot.
-         * Try once more.
-         */
-        try {
-          result =
-            await commands.execute(
-              withoutDot,
-              context
-            );
-        } catch (secondError) {
-          console.error(
-            `[Command Retry Error] ${phone}:`,
-            secondError
-          );
-          await reply(
-            '❌ Command could not be processed.'
-          );
-          return;
-        }
-      }
-      /*
-       * If the command system returns
-       * a response, send it.
-       */
-      if (
-        result !== undefined &&
-        result !== null
-      ) {
-        const response =
-          String(result).trim();
-        if (response) {
-          await reply(
-            response
-          );
-        }
-      }
-      console.log(
-        `✅ Command completed [${phone}]: ${rawText}`
-      );
-    } catch (error) {
-      console.error(
-        `[Customer Command Handler Error] ${phone}:`,
-        error
-      );
-      try {
-        await message.reply(
-          '❌ Something went wrong while processing that command.'
-        );
-      } catch (_) {}
-    }
-  }
-  /*
-   * Monitor WhatsApp status messages.
-   *
-   * Important:
-   * WhatsApp Web.js exposes status messages
-   * differently from normal chats.
-   *
-   * We use multiple available mechanisms rather
-   * than assuming message.getChat().sendSeen()
-   * means the status was actually viewed.
-   */
-  async monitorStatus(
-    client,
-    message,
-    phone
-  ) {
-    try {
-      if (
-        !message ||
-        message.from !==
-          'status@broadcast'
-      ) {
-        return;
-      }
-      console.log(
-        `👀 New WhatsApp status detected for customer ${phone}`
-      );
-      /*
-       * Attempt 1:
-       * Use client.sendSeen() when available.
-       */
-      try {
-        if (
-          typeof client.sendSeen ===
-            'function'
-        ) {
-          await client.sendSeen(
-            'status@broadcast'
-          );
-          console.log(
-            `👁️ Status seen request sent for ${phone} using client.sendSeen()`
-          );
-        }
-      } catch (error) {
-        console.error(
-          `❌ client.sendSeen() failed for ${phone}:`,
-          error.message
-        );
-      }
-      /*
-       * Attempt 2:
-       * Mark the status chat as seen.
-       */
-      try {
-        const chat =
-          await message.getChat();
-        if (
-          chat &&
-          typeof chat.sendSeen ===
-            'function'
-        ) {
-          await chat.sendSeen();
-          console.log(
-            `👁️ Status chat sendSeen() completed for ${phone}`
-          );
-        }
-      } catch (error) {
-        console.error(
-          `❌ Status chat sendSeen() failed for ${phone}:`,
-          error.message
-        );
-      }
-      /*
-       * Attempt 3:
-       * React to the status.
-       *
-       * This is kept separate because a reaction
-       * is NOT the same thing as viewing a status.
-       */
-      try {
-        if (
-          typeof message.react ===
-            'function'
-        ) {
-          await message.react(
-            '❤️'
-          );
-          console.log(
-            `❤️ Status reaction request sent for ${phone}`
-          );
-        }
-      } catch (error) {
-        console.error(
-          `❌ Status reaction failed for ${phone}:`,
-          error.message
-        );
-      }
-      console.log(
-        `✅ WhatsApp status monitoring completed for ${phone}`
-      );
-    } catch (error) {
-      console.error(
-        `[Status Monitor Error] ${phone}:`,
-        error
-      );
-    }
-  }
   async startAccount(phone) {
     const normalized =
       this.normalizeNumber(phone);
@@ -548,9 +155,7 @@ class MultiAccountWhatsAppService {
       );
     }
     const existing =
-      this.clients.get(
-        normalized
-      );
+      this.clients.get(normalized);
     if (existing) {
       try {
         if (existing.info) {
@@ -567,9 +172,7 @@ class MultiAccountWhatsAppService {
       } catch (_) {}
     }
     if (
-      this.connecting.has(
-        normalized
-      )
+      this.connecting.has(normalized)
     ) {
       return {
         success: true,
@@ -577,91 +180,87 @@ class MultiAccountWhatsAppService {
           'WhatsApp account is already connecting.'
       };
     }
-    this.connecting.add(
-      normalized
-    );
-    this.errors.delete(
-      normalized
-    );
-    this.pairingCodes.delete(
-      normalized
-    );
+    this.connecting.add(normalized);
+    this.errors.delete(normalized);
+    this.pairingCodes.delete(normalized);
     try {
       const chromePath =
         this.getChromePath();
       console.log(
         `🔄 Starting customer WhatsApp account: ${normalized}`
       );
-      const client =
-        new Client({
-          authStrategy:
-            new LocalAuth({
-              clientId:
-                this.getSessionId(
-                  normalized
-                ),
-              dataPath:
-                this.sessionsDir
-            }),
-          puppeteer: {
-            executablePath:
-              chromePath,
-            headless: true,
-            args: [
-              '--no-sandbox',
-              '--disable-setuid-sandbox',
-              '--disable-dev-shm-usage',
-              '--disable-gpu',
-              '--no-first-run',
-              '--no-zygote',
-              '--disable-extensions',
-              '--disable-background-networking',
-              '--disable-background-timer-throttling',
-              '--disable-backgrounding-occluded-windows',
-              '--disable-breakpad',
-              '--disable-component-extensions-with-background-pages',
-              '--disable-features=Translate,BackForwardCache',
-              '--disable-hang-monitor',
-              '--disable-ipc-flooding-protection',
-              '--disable-popup-blocking',
-              '--disable-renderer-backgrounding',
-              '--disable-sync',
-              '--metrics-recording-only',
-              '--mute-audio',
-              '--js-flags=--max-old-space-size=256'
-            ]
-          }
-        });
+      const client = new Client({
+        authStrategy: new LocalAuth({
+          clientId:
+            this.getSessionId(normalized),
+          dataPath:
+            this.sessionsDir
+        }),
+        puppeteer: {
+          executablePath:
+            chromePath,
+          headless: true,
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-extensions',
+            '--disable-background-networking',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-breakpad',
+            '--disable-component-extensions-with-background-pages',
+            '--disable-features=Translate,BackForwardCache',
+            '--disable-hang-monitor',
+            '--disable-ipc-flooding-protection',
+            '--disable-popup-blocking',
+            '--disable-renderer-backgrounding',
+            '--disable-sync',
+            '--metrics-recording-only',
+            '--mute-audio',
+            '--js-flags=--max-old-space-size=256'
+          ]
+        }
+      });
       this.clients.set(
         normalized,
         client
       );
-      client.on(
-        'code',
-        (code) => {
-          const pairingCode =
-            String(code);
-          this.pairingCodes.set(
-            normalized,
-            pairingCode
-          );
-          multiAccountService.setPairingCode(
-            normalized,
-            pairingCode
-          );
-          console.log(
-            `🔑 Pairing code for ${normalized}: ${pairingCode}`
-          );
+      /*
+       * PHONE-NUMBER PAIRING CODE
+       */
+      client.on('code', (code) => {
+        const pairingCode =
+          String(code || '').trim();
+        if (!pairingCode) {
+          return;
         }
-      );
-      client.on(
-        'qr',
-        () => {
-          console.log(
-            `ℹ️ QR received for ${normalized}; phone-number pairing is being used.`
-          );
-        }
-      );
+        this.pairingCodes.set(
+          normalized,
+          pairingCode
+        );
+        multiAccountService.setPairingCode(
+          normalized,
+          pairingCode
+        );
+        console.log(
+          `🔑 Pairing code for ${normalized}: ${pairingCode}`
+        );
+      });
+      /*
+       * QR IS NOT USED.
+       */
+      client.on('qr', () => {
+        console.log(
+          `ℹ️ QR received for ${normalized}; phone-number pairing is being used.`
+        );
+      });
+      /*
+       * AUTHENTICATED
+       */
       client.on(
         'authenticated',
         () => {
@@ -676,6 +275,9 @@ class MultiAccountWhatsAppService {
           );
         }
       );
+      /*
+       * READY
+       */
       client.on(
         'ready',
         () => {
@@ -700,6 +302,9 @@ class MultiAccountWhatsAppService {
           );
         }
       );
+      /*
+       * AUTH FAILURE
+       */
       client.on(
         'auth_failure',
         (message) => {
@@ -726,6 +331,9 @@ class MultiAccountWhatsAppService {
           );
         }
       );
+      /*
+       * DISCONNECTED
+       */
       client.on(
         'disconnected',
         (reason) => {
@@ -742,8 +350,7 @@ class MultiAccountWhatsAppService {
           this.errors.set(
             normalized,
             String(
-              reason ||
-              'Disconnected'
+              reason || 'Disconnected'
             )
           );
           multiAccountService.setConnected(
@@ -759,25 +366,49 @@ class MultiAccountWhatsAppService {
         }
       );
       /*
-       * MAIN MESSAGE HANDLER
+       * =====================================================
+       * NORMAL WHATSAPP MESSAGE HANDLER
+       * =====================================================
        *
-       * This is the important fix.
+       * IMPORTANT:
+       * We use ONLY message_create here.
        *
-       * Status messages go to the status monitor.
-       * Normal messages go to the command system.
+       * This prevents the same command from being
+       * processed twice.
+       *
+       * Commands such as:
+       *
+       * .menu
+       * .status
+       * .start
+       * .boot
+       * .boot status
+       *
+       * are passed into the existing commands system.
        */
       client.on(
         'message_create',
         async (message) => {
           try {
+            if (!message) {
+              return;
+            }
             /*
-             * STATUS
+             * Ignore messages that are not actually
+             * associated with this customer session.
+             */
+            const text =
+              String(
+                message.body || ''
+              ).trim();
+            /*
+             * STATUS MESSAGE
              */
             if (
               message.from ===
               'status@broadcast'
             ) {
-              await this.monitorStatus(
+              await this.handleStatus(
                 client,
                 message,
                 normalized
@@ -785,60 +416,153 @@ class MultiAccountWhatsAppService {
               return;
             }
             /*
-             * NORMAL COMMAND
+             * Ignore empty messages.
              */
-            await this.handleCommand(
-              client,
+            if (!text) {
+              return;
+            }
+            /*
+             * Do not process our own normal outgoing
+             * messages as customer commands.
+             */
+            if (
+              message.fromMe === true
+            ) {
+              return;
+            }
+            /*
+             * Only commands beginning with "." are
+             * sent to the command system.
+             */
+            if (
+              !text.startsWith('.')
+            ) {
+              return;
+            }
+            console.log(
+              `📩 COMMAND from ${normalized}: ${text}`
+            );
+            /*
+             * Build command context.
+             */
+            const context = {
               message,
-              normalized
+              client,
+              whatsapp: this,
+              from:
+                message.from,
+              chat:
+                message.from,
+              sender:
+                message.author ||
+                message.from,
+              args:
+                this.getCommandArgs(text),
+              isOwner: true,
+              isApproved: true,
+              reply: async (
+                response
+              ) => {
+                if (
+                  response ===
+                    undefined ||
+                  response === null
+                ) {
+                  return null;
+                }
+                const replyText =
+                  String(
+                    response
+                  ).trim();
+                if (!replyText) {
+                  return null;
+                }
+                try {
+                  return await message.reply(
+                    replyText
+                  );
+                } catch (
+                  replyError
+                ) {
+                  console.error(
+                    `[Reply Error ${normalized}]`,
+                    replyError.message
+                  );
+                  try {
+                    return await client.sendMessage(
+                      message.from,
+                      replyText
+                    );
+                  } catch (
+                    sendError
+                  ) {
+                    console.error(
+                      `[Send Error ${normalized}]`,
+                      sendError.message
+                    );
+                    throw sendError;
+                  }
+                }
+              }
+            };
+            /*
+             * Execute through the existing command
+             * system.
+             */
+            const result =
+              await commands.execute(
+                text,
+                context
+              );
+            /*
+             * If the command system returns text,
+             * send it back.
+             */
+            if (
+              result !==
+                undefined &&
+              result !== null
+            ) {
+              const response =
+                String(
+                  result
+                ).trim();
+              if (response) {
+                await context.reply(
+                  response
+                );
+              }
+            }
+            console.log(
+              `✅ Command completed for ${normalized}: ${text}`
             );
           } catch (error) {
             console.error(
-              `[Message Handler Error] ${normalized}:`,
+              `[Command Handler Error ${normalized}]`,
               error
             );
+            try {
+              if (
+                message &&
+                message.from &&
+                message.from !==
+                  'status@broadcast'
+              ) {
+                await message.reply(
+                  '❌ Something went wrong while processing that command.'
+                );
+              }
+            } catch (_) {}
           }
         }
       );
       /*
-       * Also listen for incoming messages.
-       *
-       * message_create catches messages created
-       * by the account, while message catches
-       * incoming messages from other users.
+       * INITIALIZE WHATSAPP WEB
        */
-      client.on(
-        'message',
-        async (message) => {
-          try {
-            if (
-              message.from ===
-              'status@broadcast'
-            ) {
-              await this.monitorStatus(
-                client,
-                message,
-                normalized
-              );
-              return;
-            }
-            await this.handleCommand(
-              client,
-              message,
-              normalized
-            );
-          } catch (error) {
-            console.error(
-              `[Incoming Message Error] ${normalized}:`,
-              error
-            );
-          }
-        }
-      );
       await client.initialize();
       /*
-       * Request phone-number pairing code
-       * if the session is not authenticated.
+       * REQUEST PHONE-NUMBER PAIRING CODE
+       * ONLY WHEN NOT ALREADY AUTHENTICATED.
        */
       if (
         !client.info &&
@@ -857,18 +581,20 @@ class MultiAccountWhatsAppService {
               180000
             );
           const pairingCode =
-            String(code);
-          this.pairingCodes.set(
-            normalized,
-            pairingCode
-          );
-          multiAccountService.setPairingCode(
-            normalized,
-            pairingCode
-          );
-          console.log(
-            `🔑 PAIRING CODE FOR ${normalized}: ${pairingCode}`
-          );
+            String(code || '').trim();
+          if (pairingCode) {
+            this.pairingCodes.set(
+              normalized,
+              pairingCode
+            );
+            multiAccountService.setPairingCode(
+              normalized,
+              pairingCode
+            );
+            console.log(
+              `🔑 PAIRING CODE FOR ${normalized}: ${pairingCode}`
+            );
+          }
         } catch (error) {
           console.error(
             `❌ Pairing code error for ${normalized}:`,
@@ -920,6 +646,102 @@ class MultiAccountWhatsAppService {
       throw error;
     }
   }
+  /*
+   * Extract command arguments.
+   *
+   * Example:
+   *
+   * .boot status
+   *
+   * becomes:
+   *
+   * ['status']
+   */
+  getCommandArgs(text) {
+    return String(text || '')
+      .trim()
+      .slice(1)
+      .trim()
+      .split(/\s+/)
+      .slice(1);
+  }
+  /*
+   * =====================================================
+   * WHATSAPP STATUS HANDLER
+   * =====================================================
+   */
+  async handleStatus(
+    client,
+    message,
+    phone
+  ) {
+    try {
+      console.log(
+        `👀 New WhatsApp status detected for customer ${phone}`
+      );
+      /*
+       * Try the actual chat object first.
+       *
+       * This is the closest normal WhatsApp Web.js
+       * operation for marking a status conversation
+       * as seen.
+       */
+      try {
+        const chat =
+          await message.getChat();
+        if (
+          chat &&
+          typeof chat.sendSeen ===
+            'function'
+        ) {
+          await chat.sendSeen();
+          console.log(
+            `👁️ Status seen request sent for ${phone}`
+          );
+        }
+      } catch (error) {
+        console.error(
+          `❌ Status seen error for ${phone}:`,
+          error.message
+        );
+      }
+      /*
+       * Do NOT pretend that a status reaction was
+       * successfully delivered when WhatsApp Web.js
+       * has not confirmed it.
+       *
+       * message.react() is not reliable for
+       * status@broadcast in every WhatsApp Web.js
+       * version.
+       */
+      if (
+        typeof message.react ===
+        'function'
+      ) {
+        try {
+          await message.react('❤️');
+          console.log(
+            `❤️ Status reaction request sent for ${phone}`
+          );
+        } catch (error) {
+          console.error(
+            `❌ Status reaction failed for ${phone}:`,
+            error.message
+          );
+        }
+      }
+    } catch (error) {
+      console.error(
+        `[Status Handler Error ${phone}]`,
+        error
+      );
+    }
+  }
+  /*
+   * =====================================================
+   * PAIRING CODE
+   * =====================================================
+   */
   getPairingCode(phone) {
     const normalized =
       this.normalizeNumber(phone);
@@ -934,6 +756,11 @@ class MultiAccountWhatsAppService {
         code
     };
   }
+  /*
+   * =====================================================
+   * STATUS
+   * =====================================================
+   */
   getStatus(phone) {
     const normalized =
       this.normalizeNumber(phone);
@@ -956,18 +783,21 @@ class MultiAccountWhatsAppService {
       account.status ===
         'expired'
     ) {
-      status = 'Expired';
+      status =
+        'Expired';
     } else if (
       client &&
       client.info
     ) {
-      status = 'Connected';
+      status =
+        'Connected';
     } else if (
       this.connecting.has(
         normalized
       )
     ) {
-      status = 'Connecting';
+      status =
+        'Connecting';
     }
     return {
       connected:
@@ -985,6 +815,11 @@ class MultiAccountWhatsAppService {
         ) || null
     };
   }
+  /*
+   * =====================================================
+   * DISCONNECT
+   * =====================================================
+   */
   async disconnectAccount(phone) {
     const normalized =
       this.normalizeNumber(phone);
@@ -1010,7 +845,7 @@ class MultiAccountWhatsAppService {
       await client.destroy();
     } catch (error) {
       console.error(
-        '[MultiAccountWhatsApp] Disconnect error:',
+        `[Disconnect Error ${normalized}]`,
         error.message
       );
     }
@@ -1021,6 +856,9 @@ class MultiAccountWhatsAppService {
       normalized
     );
     this.pairingCodes.delete(
+      normalized
+    );
+    this.errors.delete(
       normalized
     );
     multiAccountService.setConnected(
@@ -1036,6 +874,11 @@ class MultiAccountWhatsAppService {
         'WhatsApp account disconnected.'
     };
   }
+  /*
+   * =====================================================
+   * EXPIRE ACCOUNT
+   * =====================================================
+   */
   async expireAccount(phone) {
     const normalized =
       this.normalizeNumber(phone);
@@ -1051,11 +894,80 @@ class MultiAccountWhatsAppService {
         'Account expired and disconnected.'
     };
   }
+  /*
+   * =====================================================
+   * AUTOMATIC EXPIRY MONITOR
+   * =====================================================
+   */
+  startExpiryMonitor() {
+    if (this.statusMonitor) {
+      return;
+    }
+    console.log(
+      '⏱️ Starting automatic account expiry monitor...'
+    );
+    this.statusMonitor =
+      setInterval(
+        async () => {
+          try {
+            const accounts =
+              multiAccountService.getAllAccounts();
+            for (const account of accounts) {
+              if (!account || !account.phone) {
+                continue;
+              }
+              const check =
+                multiAccountService.checkAccount(
+                  account.phone
+                );
+              if (
+                check.exists &&
+                !check.active &&
+                account.status !==
+                  'expired'
+              ) {
+                console.log(
+                  `⛔ Expiring WhatsApp account: ${account.phone}`
+                );
+                try {
+                  await this.expireAccount(
+                    account.phone
+                  );
+                } catch (
+                  error
+                ) {
+                  console.error(
+                    `[Expiry Error ${account.phone}]`,
+                    error.message
+                  );
+                }
+              }
+            }
+          } catch (error) {
+            console.error(
+              '[Expiry Monitor Error]',
+              error.message
+            );
+          }
+        },
+        60 * 1000
+      );
+  }
+  /*
+   * =====================================================
+   * CONNECTED ACCOUNTS
+   * =====================================================
+   */
   getConnectedAccounts() {
     return Array.from(
       this.clients.keys()
     );
   }
+  /*
+   * =====================================================
+   * STATISTICS
+   * =====================================================
+   */
   getStats() {
     return {
       activeConnections:
