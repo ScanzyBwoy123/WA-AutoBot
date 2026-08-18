@@ -234,6 +234,17 @@ class MultiAccountWhatsAppService {
     );
   }
 
+  /*
+   * ============================================================
+   * COMMAND HANDLER
+   * ============================================================
+   *
+   * This function only receives messages that have already
+   * passed the linked-account security check.
+   *
+   * It does NOT reply to ordinary messages.
+   */
+
   async handleCommand(message, phone) {
     try {
       if (!message) {
@@ -255,10 +266,6 @@ class MultiAccountWhatsAppService {
         return;
       }
 
-      console.log(
-        `📥 Command received from ${phone}: ${body}`
-      );
-
       const commandRouter =
         this.getCommandRouter();
 
@@ -266,36 +273,57 @@ class MultiAccountWhatsAppService {
         !commandRouter ||
         typeof commandRouter.execute !== 'function'
       ) {
-        await this.safeReply(
-          message,
-          '❌ Command system is not configured correctly.'
+        console.error(
+          `[Commands] Command router unavailable for ${phone}`
         );
 
         return;
       }
 
       const context = {
-        client: this.clients.get(phone),
+        client:
+          this.clients.get(phone),
+
         message,
+
         phone,
-        from: message.from,
-        chatId: message.from,
+
+        from:
+          message.from,
+
+        chatId:
+          message.from,
 
         account:
           multiAccountService.getAccount(
             phone
           ),
 
-        service: this,
+        service:
+          this,
 
         multiAccountService
       };
+
+      console.log(
+        `📥 COMMAND from ${phone}: ${body}`
+      );
 
       const response =
         await commandRouter.execute(
           body,
           context
         );
+
+      /*
+       * IMPORTANT:
+       *
+       * null / undefined means the command router
+       * decided not to respond.
+       *
+       * Therefore normal messages will not create
+       * "Unknown command" spam.
+       */
 
       if (
         response !== undefined &&
@@ -316,15 +344,14 @@ class MultiAccountWhatsAppService {
         `[Commands] Command handling failed for ${phone}:`,
         error
       );
-
-      await this.safeReply(
-        message,
-        `❌ Command failed: ${
-          error.message || 'Unknown error'
-        }`
-      );
     }
   }
+
+  /*
+   * ============================================================
+   * STATUS FUNCTIONS
+   * ============================================================
+   */
 
   async openStatus(client, broadcast, phone) {
     try {
@@ -738,6 +765,12 @@ class MultiAccountWhatsAppService {
     this.statusBusy.delete(phone);
   }
 
+  /*
+   * ============================================================
+   * START ACCOUNT
+   * ============================================================
+   */
+
   async startAccount(phone) {
     const normalized =
       this.normalizeNumber(phone);
@@ -755,14 +788,14 @@ class MultiAccountWhatsAppService {
 
     if (
       !accountCheck ||
-      accountCheck.exists !== true
+      !accountCheck.exists
     ) {
       throw new Error(
         'Account has not been registered.'
       );
     }
 
-    if (accountCheck.active !== true) {
+    if (!accountCheck.active) {
       throw new Error(
         'Your trial or subscription has expired. Please subscribe to continue.'
       );
@@ -871,31 +904,27 @@ class MultiAccountWhatsAppService {
       );
 
       /*
-       * ============================================================
+       * ========================================================
        * COMMAND SECURITY
-       * ============================================================
+       * ========================================================
        *
-       * ONLY the WhatsApp account that linked/paired this
-       * session can execute commands.
+       * ONLY the WhatsApp account that linked this session
+       * can execute commands.
        *
-       * OWNER:
+       * The linked account can use commands:
        *
-       * Own DM              -> ALLOWED
-       * Friend's DM         -> ALLOWED
-       * Group               -> ALLOWED
+       * 1. In its own DM
+       * 2. In another person's DM
+       * 3. In a group
        *
-       * OTHER PEOPLE:
+       * Other people CANNOT execute commands.
        *
-       * Friend's own DM     -> BLOCKED
-       * Unlinked number     -> BLOCKED
+       * Most importantly:
        *
-       * The key check is message.fromMe === true.
+       * message_create + fromMe === true
        *
-       * message_create is intentionally used here because it
-       * allows us to detect messages created/sent by the linked
-       * WhatsApp account.
-       *
-       * DO NOT add another client.on('message') command handler.
+       * means the message was SENT BY THE LINKED WHATSAPP
+       * ACCOUNT.
        */
 
       client.on(
@@ -907,31 +936,17 @@ class MultiAccountWhatsAppService {
             }
 
             /*
-             * SECURITY CHECK #1
+             * CRITICAL SECURITY CHECK
              *
-             * The message MUST have been sent by the
-             * WhatsApp account that owns this session.
-             *
-             * If a friend sends:
-             *
-             * menu
-             * pin
-             * delete
-             * help
-             *
-             * message.fromMe will be false and the message
-             * will be ignored.
+             * Only messages sent by the linked
+             * WhatsApp account are commands.
              */
             if (message.fromMe !== true) {
-              console.log(
-                `🚫 Unauthorized command blocked for linked account ${normalized}`
-              );
-
               return;
             }
 
             /*
-             * Never process WhatsApp Status as a command.
+             * Never process Status as a command.
              */
             if (
               message.from === 'status@broadcast' ||
@@ -940,9 +955,10 @@ class MultiAccountWhatsAppService {
               return;
             }
 
-            const body = String(
-              message.body || ''
-            ).trim();
+            const body =
+              String(
+                message.body || ''
+              ).trim();
 
             /*
              * Ignore empty messages.
@@ -952,10 +968,8 @@ class MultiAccountWhatsAppService {
             }
 
             /*
-             * SECURITY CHECK #2
-             *
-             * Confirm that the linked WhatsApp number
-             * is registered in the account system.
+             * Make sure the linked WhatsApp number
+             * is still registered and active.
              */
             const accountCheck =
               multiAccountService.checkAccount(
@@ -964,25 +978,34 @@ class MultiAccountWhatsAppService {
 
             if (
               !accountCheck ||
-              accountCheck.exists !== true
+              !accountCheck.exists
             ) {
               console.log(
-                `🚫 Command blocked: ${normalized} is not registered.`
+                `🚫 COMMAND BLOCKED: ${normalized} is not registered.`
+              );
+
+              return;
+            }
+
+            if (
+              accountCheck.active !== true
+            ) {
+              console.log(
+                `🚫 COMMAND BLOCKED: ${normalized} account is inactive.`
               );
 
               return;
             }
 
             /*
-             * SECURITY CHECK #3
-             *
-             * The linked account must still be active.
+             * Prevent the bot from processing its own
+             * generated messages.
              */
-            if (accountCheck.active !== true) {
-              console.log(
-                `🚫 Command blocked: ${normalized} account is inactive.`
-              );
-
+            if (
+              message.author &&
+              String(message.author)
+                .includes('status')
+            ) {
               return;
             }
 
@@ -990,11 +1013,6 @@ class MultiAccountWhatsAppService {
               `📤 AUTHORIZED COMMAND from linked account ${normalized}: ${body}`
             );
 
-            /*
-             * The linked owner can now execute the command
-             * in ANY chat where that linked WhatsApp account
-             * sends the command.
-             */
             await this.handleCommand(
               message,
               normalized
@@ -1007,6 +1025,21 @@ class MultiAccountWhatsAppService {
           }
         }
       );
+
+      /*
+       * ========================================================
+       * IMPORTANT:
+       *
+       * THERE IS INTENTIONALLY NO:
+       *
+       * client.on('message', ...)
+       *
+       * HERE.
+       *
+       * We must NOT have both message and message_create.
+       * Having both causes duplicate command processing.
+       * ========================================================
+       */
 
       client.on(
         'qr',
@@ -1033,19 +1066,6 @@ class MultiAccountWhatsAppService {
           );
         }
       );
-
-      /*
-       * IMPORTANT:
-       *
-       * There is intentionally NO:
-       *
-       * client.on('message', ...)
-       *
-       * command handler here.
-       *
-       * Incoming messages from friends must NOT be sent
-       * to handleCommand().
-       */
 
       client.on(
         'ready',
@@ -1272,6 +1292,12 @@ class MultiAccountWhatsAppService {
     }
   }
 
+  /*
+   * ============================================================
+   * PAIRING CODE
+   * ============================================================
+   */
+
   getPairingCode(phone) {
     const normalized =
       this.normalizeNumber(phone);
@@ -1289,6 +1315,12 @@ class MultiAccountWhatsAppService {
         code
     };
   }
+
+  /*
+   * ============================================================
+   * ACCOUNT STATUS
+   * ============================================================
+   */
 
   getStatus(phone) {
     const normalized =
@@ -1357,6 +1389,12 @@ class MultiAccountWhatsAppService {
         )
     };
   }
+
+  /*
+   * ============================================================
+   * DISCONNECT ACCOUNT
+   * ============================================================
+   */
 
   async disconnectAccount(phone) {
     const normalized =
@@ -1433,6 +1471,12 @@ class MultiAccountWhatsAppService {
     };
   }
 
+  /*
+   * ============================================================
+   * EXPIRE ACCOUNT
+   * ============================================================
+   */
+
   async expireAccount(phone) {
     const normalized =
       this.normalizeNumber(phone);
@@ -1452,11 +1496,23 @@ class MultiAccountWhatsAppService {
     };
   }
 
+  /*
+   * ============================================================
+   * CONNECTED ACCOUNTS
+   * ============================================================
+   */
+
   getConnectedAccounts() {
     return Array.from(
       this.clients.keys()
     );
   }
+
+  /*
+   * ============================================================
+   * STATISTICS
+   * ============================================================
+   */
 
   getStats() {
     return {
