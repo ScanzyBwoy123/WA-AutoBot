@@ -10,9 +10,7 @@ class WhatsAppService {
     this.pairingCode = null;
     this.lastError = null;
 
-    console.log(
-      '[WhatsAppService] Pairing-code WhatsApp service initialized'
-    );
+    console.log('[WhatsAppService] Pairing-code service initialized');
   }
 
   init() {
@@ -47,24 +45,21 @@ class WhatsAppService {
       const found = this.findChrome(root);
 
       if (found) {
-        candidates.push(found);
+        console.log('[WhatsAppService] Chrome found:', found);
+        return found;
       }
     }
 
-    candidates.push(
+    const systemChrome = [
       '/usr/bin/google-chrome',
       '/usr/bin/google-chrome-stable',
       '/usr/bin/chromium',
       '/usr/bin/chromium-browser'
-    );
+    ];
 
-    for (const candidate of candidates) {
-      if (candidate && fs.existsSync(candidate)) {
-        console.log(
-          '[WhatsAppService] Chrome found:',
-          candidate
-        );
-
+    for (const candidate of systemChrome) {
+      if (fs.existsSync(candidate)) {
+        console.log('[WhatsAppService] Chrome found:', candidate);
         return candidate;
       }
     }
@@ -121,12 +116,6 @@ class WhatsAppService {
 
     return null;
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | START WHATSAPP
-  |--------------------------------------------------------------------------
-  */
 
   async connect() {
     if (this.isReady) {
@@ -187,9 +176,6 @@ class WhatsAppService {
         }
       });
 
-      /*
-       * Pairing code received.
-       */
       this.client.on('code', (code) => {
         console.log(
           '🔑 WHATSAPP PAIRING CODE:',
@@ -257,31 +243,27 @@ class WhatsAppService {
       await this.client.initialize();
 
       /*
-       * Give WhatsApp Web a moment to initialize,
-       * then request the pairing code.
+       * Use the existing OWNER_NUMBER variable.
        *
-       * IMPORTANT:
-       * Number must be international format
-       * WITHOUT + or spaces.
-       *
-       * Example:
+       * Format:
        * 233XXXXXXXXX
+       *
+       * No + and no spaces.
        */
-
-      const phoneNumber =
-        String(
-          process.env.WHATSAPP_PHONE_NUMBER || ''
-        )
-          .replace(/\D/g, '');
+      const phoneNumber = String(
+        process.env.WHATSAPP_PHONE_NUMBER ||
+        process.env.OWNER_NUMBER ||
+        ''
+      ).replace(/\D/g, '');
 
       if (!phoneNumber) {
         throw new Error(
-          'WHATSAPP_PHONE_NUMBER environment variable is missing.'
+          'OWNER_NUMBER environment variable is missing.'
         );
       }
 
       console.log(
-        '[WhatsAppService] Requesting pairing code for configured phone number'
+        '[WhatsAppService] Requesting WhatsApp pairing code...'
       );
 
       const code =
@@ -300,8 +282,7 @@ class WhatsAppService {
 
       return {
         success: true,
-        message:
-          'WhatsApp pairing code generated.',
+        message: 'WhatsApp pairing code generated.',
         pairingCode: code
       };
 
@@ -328,24 +309,12 @@ class WhatsAppService {
     }
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | GET PAIRING CODE
-  |--------------------------------------------------------------------------
-  */
-
   getPairingCode() {
     return {
       available: !!this.pairingCode,
       pairingCode: this.pairingCode
     };
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | STATUS
-  |--------------------------------------------------------------------------
-  */
 
   getStatus() {
     let status = 'Disconnected';
@@ -365,12 +334,6 @@ class WhatsAppService {
       error: this.lastError
     };
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | STOP
-  |--------------------------------------------------------------------------
-  */
 
   async disconnect() {
     try {
@@ -398,8 +361,7 @@ class WhatsAppService {
 
       return {
         success: true,
-        message:
-          'WhatsApp connection stopped.'
+        message: 'WhatsApp connection stopped.'
       };
 
     } catch (error) {
