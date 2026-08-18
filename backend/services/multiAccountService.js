@@ -16,7 +16,14 @@ class MultiAccountService {
       'accounts.json'
     );
 
+    /*
+     * Customer trial length.
+     */
     this.TRIAL_HOURS = 48;
+
+    /*
+     * Paid subscription length.
+     */
     this.PAID_DAYS = 30;
 
     this.ensureStorage();
@@ -26,6 +33,12 @@ class MultiAccountService {
       '[MultiAccountService] Multi-account service initialized'
     );
   }
+
+  /*
+   * --------------------------------------------------
+   * STORAGE
+   * --------------------------------------------------
+   */
 
   ensureStorage() {
     try {
@@ -55,7 +68,8 @@ class MultiAccountService {
   }
 
   isValidPhoneNumber(number) {
-    const normalized = this.normalizeNumber(number);
+    const normalized =
+      this.normalizeNumber(number);
 
     return (
       normalized.length >= 8 &&
@@ -85,8 +99,15 @@ class MultiAccountService {
           continue;
         }
 
+        const phone =
+          this.normalizeNumber(
+            account.phone
+          );
+
+        account.phone = phone;
+
         this.accounts.set(
-          account.phone,
+          phone,
           account
         );
       }
@@ -122,21 +143,44 @@ class MultiAccountService {
     }
   }
 
+  /*
+   * --------------------------------------------------
+   * ACCOUNT CREATION
+   * --------------------------------------------------
+   */
+
   createAccount(phone) {
     const normalized =
       this.normalizeNumber(phone);
 
-    if (!this.isValidPhoneNumber(normalized)) {
+    if (
+      !this.isValidPhoneNumber(
+        normalized
+      )
+    ) {
       return {
         success: false,
-        message: 'Invalid WhatsApp phone number.'
+        message:
+          'Invalid WhatsApp phone number.'
       };
     }
 
     const existing =
-      this.accounts.get(normalized);
+      this.accounts.get(
+        normalized
+      );
 
     if (existing) {
+
+      /*
+       * If an old trial has already expired,
+       * report it as expired instead of
+       * silently giving another trial.
+       */
+      this.checkAccount(
+        normalized
+      );
+
       return {
         success: true,
         existing: true,
@@ -144,7 +188,8 @@ class MultiAccountService {
       };
     }
 
-    const now = Date.now();
+    const now =
+      Date.now();
 
     const trialExpires =
       now +
@@ -154,37 +199,54 @@ class MultiAccountService {
       1000;
 
     const account = {
-      id: crypto
-        .randomBytes(12)
-        .toString('hex'),
 
-      phone: normalized,
+      id:
+        crypto
+          .randomBytes(12)
+          .toString('hex'),
 
-      status: 'trial',
+      phone:
+        normalized,
+
+      status:
+        'trial',
 
       trialStartedAt:
-        new Date(now).toISOString(),
+        new Date(now)
+          .toISOString(),
 
       trialExpiresAt:
-        new Date(trialExpires).toISOString(),
+        new Date(trialExpires)
+          .toISOString(),
 
-      paid: false,
+      paid:
+        false,
 
-      subscriptionStartedAt: null,
+      subscriptionStartedAt:
+        null,
 
-      subscriptionExpiresAt: null,
+      subscriptionExpiresAt:
+        null,
 
-      connected: false,
+      paymentReference:
+        null,
 
-      connecting: false,
+      connected:
+        false,
 
-      pairingCode: null,
+      connecting:
+        false,
+
+      pairingCode:
+        null,
 
       createdAt:
-        new Date(now).toISOString(),
+        new Date(now)
+          .toISOString(),
 
       updatedAt:
-        new Date(now).toISOString()
+        new Date(now)
+          .toISOString()
     };
 
     this.accounts.set(
@@ -195,7 +257,7 @@ class MultiAccountService {
     this.saveAccounts();
 
     console.log(
-      `🎁 New 48-hour trial created for ${normalized}`
+      `🎁 New ${this.TRIAL_HOURS}-hour trial created for ${normalized}`
     );
 
     return {
@@ -205,13 +267,22 @@ class MultiAccountService {
     };
   }
 
+  /*
+   * --------------------------------------------------
+   * ACCOUNT LOOKUP
+   * --------------------------------------------------
+   */
+
   getAccount(phone) {
     const normalized =
-      this.normalizeNumber(phone);
+      this.normalizeNumber(
+        phone
+      );
 
     return (
-      this.accounts.get(normalized) ||
-      null
+      this.accounts.get(
+        normalized
+      ) || null
     );
   }
 
@@ -221,13 +292,28 @@ class MultiAccountService {
     );
   }
 
+  /*
+   * --------------------------------------------------
+   * EXPIRY CHECKS
+   * --------------------------------------------------
+   */
+
   isTrialExpired(account) {
     if (!account) {
       return true;
     }
 
-    if (account.status !== 'trial') {
+    if (
+      account.status !==
+      'trial'
+    ) {
       return false;
+    }
+
+    if (
+      !account.trialExpiresAt
+    ) {
+      return true;
     }
 
     return (
@@ -238,13 +324,16 @@ class MultiAccountService {
     );
   }
 
-  isSubscriptionExpired(account) {
+  isSubscriptionExpired(
+    account
+  ) {
     if (!account) {
       return true;
     }
 
     if (
-      account.status !== 'paid'
+      account.status !==
+      'paid'
     ) {
       return false;
     }
@@ -263,178 +352,583 @@ class MultiAccountService {
     );
   }
 
+  /*
+   * Return remaining trial/subscription
+   * time in milliseconds.
+   */
+  getRemainingTime(account) {
+    if (!account) {
+      return 0;
+    }
+
+    let expiresAt = null;
+
+    if (
+      account.status ===
+      'trial'
+    ) {
+      expiresAt =
+        account.trialExpiresAt;
+    }
+
+    if (
+      account.status ===
+      'paid'
+    ) {
+      expiresAt =
+        account.subscriptionExpiresAt;
+    }
+
+    if (!expiresAt) {
+      return 0;
+    }
+
+    const remaining =
+      new Date(
+        expiresAt
+      ).getTime() -
+      Date.now();
+
+    return Math.max(
+      0,
+      remaining
+    );
+  }
+
+  /*
+   * Human-readable remaining time.
+   */
+  getRemainingTimeText(
+    account
+  ) {
+    const remaining =
+      this.getRemainingTime(
+        account
+      );
+
+    if (
+      remaining <= 0
+    ) {
+      return 'Expired';
+    }
+
+    const totalSeconds =
+      Math.floor(
+        remaining / 1000
+      );
+
+    const days =
+      Math.floor(
+        totalSeconds /
+        86400
+      );
+
+    const hours =
+      Math.floor(
+        (totalSeconds %
+          86400) /
+        3600
+      );
+
+    const minutes =
+      Math.floor(
+        (totalSeconds %
+          3600) /
+        60
+      );
+
+    if (days > 0) {
+      return `${days}d ${hours}h ${minutes}m`;
+    }
+
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+
+    return `${minutes}m`;
+  }
+
+  /*
+   * --------------------------------------------------
+   * ACCOUNT STATUS
+   * --------------------------------------------------
+   */
+
   checkAccount(phone) {
     const account =
-      this.getAccount(phone);
+      this.getAccount(
+        phone
+      );
 
     if (!account) {
       return {
         exists: false,
         active: false,
-        reason: 'ACCOUNT_NOT_FOUND'
+        expired: false,
+        reason:
+          'ACCOUNT_NOT_FOUND'
       };
     }
 
+    /*
+     * Trial expired.
+     */
     if (
-      account.status === 'trial' &&
-      this.isTrialExpired(account)
+      account.status ===
+        'trial' &&
+      this.isTrialExpired(
+        account
+      )
     ) {
-      account.status = 'expired';
-      account.connected = false;
-      account.pairingCode = null;
-      account.updatedAt =
-        new Date().toISOString();
-
-      this.saveAccounts();
+      this.markExpired(
+        account,
+        'TRIAL_EXPIRED'
+      );
 
       return {
         exists: true,
         active: false,
         expired: true,
-        reason: 'TRIAL_EXPIRED',
+        reason:
+          'TRIAL_EXPIRED',
         account
       };
     }
 
+    /*
+     * Paid subscription expired.
+     */
     if (
-      account.status === 'paid' &&
-      this.isSubscriptionExpired(account)
+      account.status ===
+        'paid' &&
+      this.isSubscriptionExpired(
+        account
+      )
     ) {
-      account.status = 'expired';
-      account.connected = false;
-      account.pairingCode = null;
-      account.updatedAt =
-        new Date().toISOString();
-
-      this.saveAccounts();
+      this.markExpired(
+        account,
+        'SUBSCRIPTION_EXPIRED'
+      );
 
       return {
         exists: true,
         active: false,
         expired: true,
-        reason: 'SUBSCRIPTION_EXPIRED',
+        reason:
+          'SUBSCRIPTION_EXPIRED',
         account
       };
     }
 
     const active =
-      account.status === 'trial' ||
-      account.status === 'paid';
+      account.status ===
+        'trial' ||
+      account.status ===
+        'paid';
 
     return {
       exists: true,
+
       active,
-      expired: false,
-      reason: active
-        ? 'ACTIVE'
-        : 'INACTIVE',
+
+      expired:
+        !active,
+
+      reason:
+        active
+          ? 'ACTIVE'
+          : 'INACTIVE',
+
+      remainingTime:
+        this.getRemainingTimeText(
+          account
+        ),
+
       account
     };
   }
 
-  setPairingCode(phone, code) {
+  /*
+   * --------------------------------------------------
+   * ACCESS CONTROL
+   * --------------------------------------------------
+   */
+
+  isAccountActive(phone) {
+    const result =
+      this.checkAccount(
+        phone
+      );
+
+    return (
+      result.exists &&
+      result.active
+    );
+  }
+
+  getAccountAccess(phone) {
+    const result =
+      this.checkAccount(
+        phone
+      );
+
+    if (
+      !result.exists
+    ) {
+      return {
+        allowed: false,
+        reason:
+          'ACCOUNT_NOT_FOUND',
+        message:
+          'Account not found.'
+      };
+    }
+
+    if (
+      !result.active
+    ) {
+      if (
+        result.reason ===
+        'TRIAL_EXPIRED'
+      ) {
+        return {
+          allowed: false,
+          reason:
+            'TRIAL_EXPIRED',
+          message:
+            'Your 48-hour free trial has expired. Please subscribe to continue.'
+        };
+      }
+
+      if (
+        result.reason ===
+        'SUBSCRIPTION_EXPIRED'
+      ) {
+        return {
+          allowed: false,
+          reason:
+            'SUBSCRIPTION_EXPIRED',
+          message:
+            'Your subscription has expired. Please renew to continue.'
+        };
+      }
+
+      return {
+        allowed: false,
+        reason:
+          'INACTIVE',
+        message:
+          'Your account is inactive.'
+      };
+    }
+
+    return {
+      allowed: true,
+
+      reason:
+        result.account.status ===
+        'paid'
+          ? 'PAID'
+          : 'TRIAL',
+
+      message:
+        result.account.status ===
+        'paid'
+          ? 'Active subscription.'
+          : 'Free trial active.',
+
+      remainingTime:
+        this.getRemainingTimeText(
+          result.account
+        ),
+
+      account:
+        result.account
+    };
+  }
+
+  /*
+   * --------------------------------------------------
+   * EXPIRATION
+   * --------------------------------------------------
+   */
+
+  markExpired(
+    account,
+    reason
+  ) {
+    account.status =
+      'expired';
+
+    account.connected =
+      false;
+
+    account.connecting =
+      false;
+
+    account.pairingCode =
+      null;
+
+    account.expiredReason =
+      reason || 'EXPIRED';
+
+    account.expiredAt =
+      new Date()
+        .toISOString();
+
+    account.updatedAt =
+      new Date()
+        .toISOString();
+
+    this.saveAccounts();
+
+    console.log(
+      `⛔ Account expired: ${account.phone} (${account.expiredReason})`
+    );
+
+    return account;
+  }
+
+  expireAccount(phone) {
     const account =
-      this.getAccount(phone);
+      this.getAccount(
+        phone
+      );
 
     if (!account) {
+      return false;
+    }
+
+    this.markExpired(
+      account,
+      'MANUAL_EXPIRATION'
+    );
+
+    return true;
+  }
+
+  /*
+   * --------------------------------------------------
+   * PAIRING
+   * --------------------------------------------------
+   */
+
+  setPairingCode(
+    phone,
+    code
+  ) {
+    const account =
+      this.getAccount(
+        phone
+      );
+
+    if (!account) {
+      return false;
+    }
+
+    /*
+     * Never create a pairing code
+     * for an expired account.
+     */
+    if (
+      !this.isAccountActive(
+        phone
+      )
+    ) {
       return false;
     }
 
     account.pairingCode =
       String(code || '');
 
-    account.connecting = true;
+    account.connecting =
+      true;
 
     account.updatedAt =
-      new Date().toISOString();
+      new Date()
+        .toISOString();
 
     this.saveAccounts();
 
     return true;
   }
 
-  clearPairingCode(phone) {
+  clearPairingCode(
+    phone
+  ) {
     const account =
-      this.getAccount(phone);
+      this.getAccount(
+        phone
+      );
 
     if (!account) {
       return false;
     }
 
-    account.pairingCode = null;
+    account.pairingCode =
+      null;
 
     account.updatedAt =
-      new Date().toISOString();
+      new Date()
+        .toISOString();
 
     this.saveAccounts();
 
     return true;
   }
 
-  setConnected(phone, connected) {
+  setConnected(
+    phone,
+    connected
+  ) {
     const account =
-      this.getAccount(phone);
+      this.getAccount(
+        phone
+      );
 
     if (!account) {
+      return false;
+    }
+
+    /*
+     * Do not allow an expired
+     * account to remain connected.
+     */
+    if (
+      connected &&
+      !this.isAccountActive(
+        phone
+      )
+    ) {
+      account.connected =
+        false;
+
+      account.connecting =
+        false;
+
+      account.pairingCode =
+        null;
+
+      account.updatedAt =
+        new Date()
+          .toISOString();
+
+      this.saveAccounts();
+
       return false;
     }
 
     account.connected =
-      Boolean(connected);
+      Boolean(
+        connected
+      );
 
-    account.connecting = false;
+    account.connecting =
+      false;
 
     if (connected) {
-      account.pairingCode = null;
+      account.pairingCode =
+        null;
     }
 
     account.updatedAt =
-      new Date().toISOString();
+      new Date()
+        .toISOString();
 
     this.saveAccounts();
 
     return true;
   }
+
+  /*
+   * --------------------------------------------------
+   * PAYMENTS / SUBSCRIPTIONS
+   * --------------------------------------------------
+   */
 
   activateSubscription(
     phone,
     paymentReference
   ) {
     const account =
-      this.getAccount(phone);
+      this.getAccount(
+        phone
+      );
 
     if (!account) {
       return {
         success: false,
-        message: 'Account not found.'
+        message:
+          'Account not found.'
       };
     }
 
-    const now = Date.now();
+    const now =
+      Date.now();
+
+    /*
+     * If the customer renews before
+     * expiry, extend from the current
+     * expiration date.
+     */
+    let startTime =
+      now;
+
+    if (
+      account.status ===
+        'paid' &&
+      account.subscriptionExpiresAt
+    ) {
+      const currentExpiry =
+        new Date(
+          account.subscriptionExpiresAt
+        ).getTime();
+
+      if (
+        currentExpiry > now
+      ) {
+        startTime =
+          currentExpiry;
+      }
+    }
 
     const expires =
-      now +
+      startTime +
       this.PAID_DAYS *
       24 *
       60 *
       60 *
       1000;
 
-    account.status = 'paid';
+    account.status =
+      'paid';
 
-    account.paid = true;
+    account.paid =
+      true;
 
     account.subscriptionStartedAt =
-      new Date(now).toISOString();
+      new Date(
+        now
+      ).toISOString();
 
     account.subscriptionExpiresAt =
-      new Date(expires).toISOString();
+      new Date(
+        expires
+      ).toISOString();
 
     account.paymentReference =
-      paymentReference || null;
+      paymentReference ||
+      null;
+
+    account.expiredReason =
+      null;
+
+    account.expiredAt =
+      null;
 
     account.updatedAt =
-      new Date().toISOString();
+      new Date()
+        .toISOString();
 
     this.saveAccounts();
 
@@ -448,37 +942,17 @@ class MultiAccountService {
     };
   }
 
-  expireAccount(phone) {
-    const account =
-      this.getAccount(phone);
-
-    if (!account) {
-      return false;
-    }
-
-    account.status = 'expired';
-
-    account.connected = false;
-
-    account.connecting = false;
-
-    account.pairingCode = null;
-
-    account.updatedAt =
-      new Date().toISOString();
-
-    this.saveAccounts();
-
-    console.log(
-      `⛔ Account expired: ${phone}`
-    );
-
-    return true;
-  }
+  /*
+   * --------------------------------------------------
+   * USER MANAGEMENT
+   * --------------------------------------------------
+   */
 
   removeAccount(phone) {
     const normalized =
-      this.normalizeNumber(phone);
+      this.normalizeNumber(
+        phone
+      );
 
     const deleted =
       this.accounts.delete(
@@ -496,51 +970,146 @@ class MultiAccountService {
     return deleted;
   }
 
-  getPublicAccount(phone) {
+  /*
+   * --------------------------------------------------
+   * PUBLIC ACCOUNT DATA
+   * --------------------------------------------------
+   */
+
+  getPublicAccount(
+    phone
+  ) {
     const account =
-      this.getAccount(phone);
+      this.getAccount(
+        phone
+      );
 
     if (!account) {
       return null;
     }
 
     return {
-      id: account.id,
-      phone: account.phone,
-      status: account.status,
-      connected: account.connected,
-      connecting: account.connecting,
+      id:
+        account.id,
+
+      phone:
+        account.phone,
+
+      status:
+        account.status,
+
+      connected:
+        account.connected,
+
+      connecting:
+        account.connecting,
+
+      trialStartedAt:
+        account.trialStartedAt,
+
       trialExpiresAt:
         account.trialExpiresAt,
+
+      subscriptionStartedAt:
+        account.subscriptionStartedAt,
+
       subscriptionExpiresAt:
         account.subscriptionExpiresAt,
-      paid: account.paid,
-      createdAt: account.createdAt
+
+      remainingTime:
+        this.getRemainingTimeText(
+          account
+        ),
+
+      paid:
+        account.paid,
+
+      expiredReason:
+        account.expiredReason ||
+        null,
+
+      createdAt:
+        account.createdAt
     };
   }
+
+  /*
+   * --------------------------------------------------
+   * STATISTICS
+   * --------------------------------------------------
+   */
 
   getStats() {
     const accounts =
       this.getAllAccounts();
 
+    /*
+     * Check expiration before
+     * calculating statistics.
+     */
+    for (
+      const account of accounts
+    ) {
+      if (
+        account.status ===
+          'trial' &&
+        this.isTrialExpired(
+          account
+        )
+      ) {
+        this.markExpired(
+          account,
+          'TRIAL_EXPIRED'
+        );
+      }
+
+      if (
+        account.status ===
+          'paid' &&
+        this.isSubscriptionExpired(
+          account
+        )
+      ) {
+        this.markExpired(
+          account,
+          'SUBSCRIPTION_EXPIRED'
+        );
+      }
+    }
+
+    const updatedAccounts =
+      this.getAllAccounts();
+
     return {
-      total: accounts.length,
+      total:
+        updatedAccounts.length,
 
-      trial: accounts.filter(
-        (a) => a.status === 'trial'
-      ).length,
+      trial:
+        updatedAccounts.filter(
+          (a) =>
+            a.status ===
+            'trial'
+        ).length,
 
-      paid: accounts.filter(
-        (a) => a.status === 'paid'
-      ).length,
+      paid:
+        updatedAccounts.filter(
+          (a) =>
+            a.status ===
+            'paid'
+        ).length,
 
-      expired: accounts.filter(
-        (a) => a.status === 'expired'
-      ).length,
+      expired:
+        updatedAccounts.filter(
+          (a) =>
+            a.status ===
+            'expired'
+        ).length,
 
-      connected: accounts.filter(
-        (a) => a.connected
-      ).length
+      connected:
+        updatedAccounts.filter(
+          (a) =>
+            a.connected
+        ).length
     };
   }
 }
