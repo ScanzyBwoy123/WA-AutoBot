@@ -1,14 +1,13 @@
-const path = require('path');
-const fs = require('fs');
-
 const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
+const qrcode = require('qrcode');
 
 class WhatsAppService {
   constructor() {
     this.client = null;
     this.isReady = false;
     this.isConnecting = false;
+    this.qrDataUrl = null;
+    this.lastError = null;
 
     console.log('[WhatsAppService] Real WhatsApp service initialized');
   }
@@ -22,58 +21,6 @@ class WhatsAppService {
     };
   }
 
-  getChromePath() {
-    // Render/environment supplied Chrome
-    if (
-      process.env.CHROME_BIN &&
-      fs.existsSync(process.env.CHROME_BIN)
-    ) {
-      console.log(
-        '[WhatsAppService] Using CHROME_BIN:',
-        process.env.CHROME_BIN
-      );
-
-      return process.env.CHROME_BIN;
-    }
-
-    // Chrome installed by our package.json postinstall script.
-    const projectChromeRoot = path.resolve(
-      __dirname,
-      '../.puppeteer/chrome'
-    );
-
-    console.log(
-      '[WhatsAppService] Searching project Chrome:',
-      projectChromeRoot
-    );
-
-    if (fs.existsSync(projectChromeRoot)) {
-      const versions = fs.readdirSync(projectChromeRoot);
-
-      for (const version of versions) {
-        const chromeLinuxPath = path.join(
-          projectChromeRoot,
-          version,
-          'chrome-linux64',
-          'chrome'
-        );
-
-        if (fs.existsSync(chromeLinuxPath)) {
-          console.log(
-            '[WhatsAppService] Chrome found:',
-            chromeLinuxPath
-          );
-
-          return chromeLinuxPath;
-        }
-      }
-    }
-
-    throw new Error(
-      `Chrome executable not found in project Puppeteer cache: ${projectChromeRoot}`
-    );
-  }
-
   async connect() {
     if (this.isReady) {
       return {
@@ -84,33 +31,28 @@ class WhatsAppService {
 
     if (this.isConnecting) {
       return {
-        success: false,
+        success: true,
         message: 'WhatsApp connection is already starting.'
       };
     }
 
     this.isConnecting = true;
+    this.lastError = null;
 
     try {
       console.log('🔄 Starting WhatsApp connection...');
 
-      const chromePath = this.getChromePath();
-
-      console.log(
-        '[WhatsAppService] Final Chrome executable:',
-        chromePath
-      );
-
+      /*
+       * IMPORTANT:
+       * Puppeteer installs Chrome during npm install.
+       * Do NOT hard-code Render's Chrome cache path.
+       */
       this.client = new Client({
         authStrategy: new LocalAuth({
-          dataPath: path.resolve(
-            __dirname,
-            '../.wwebjs_auth'
-          )
+          dataPath: './.wwebjs_auth'
         }),
 
         puppeteer: {
-          executablePath: chromePath,
           headless: true,
 
           args: [
@@ -118,77 +60,54 @@ class WhatsAppService {
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-gpu',
-            '--disable-software-rasterizer',
-            '--disable-extensions',
-            '--disable-background-networking',
-            '--disable-background-timer-throttling',
-            '--disable-backgrounding-occluded-windows',
-            '--disable-renderer-backgrounding',
-            '--disable-sync',
-            '--disable-default-apps',
             '--no-first-run',
             '--no-zygote',
-
-            // Keep Chrome as light as possible on Render.
-            '--single-process',
-            '--renderer-process-limit=1',
-            '--disable-features=Translate,BackForwardCache'
+            '--disable-extensions'
           ]
         }
       });
 
-      this.client.on('qr', (qr) => {
-        console.log('');
-        console.log('========================================');
+      this.client.on('qr', async (qr) => {
         console.log('📱 WHATSAPP QR CODE RECEIVED');
-        console.log('========================================');
 
-        qrcode.generate(qr, {
-          small: true
-        });
-
-        console.log('========================================');
+        try {
+          this.qrDataUrl = await qrcode.toDataURL(qr);
+          console.log('✅ QR code is available at /api/bot/qr');
+        } catch (error) {
+          console.error('[QR Error]', error);
+          this.lastError = error.message;
+        }
       });
 
       this.client.on('authenticated', () => {
         console.log('🔐 WhatsApp authenticated');
+
+        this.qrDataUrl = null;
       });
 
       this.client.on('auth_failure', (message) => {
-        console.error(
-          '❌ WhatsApp authentication failure:',
-          message
-        );
+        console.error('❌ WhatsApp authentication failure:', message);
 
         this.isReady = false;
         this.isConnecting = false;
+        this.lastError = message;
       });
 
       this.client.on('ready', () => {
-        console.log('========================================');
-        console.log('✅ WHATSAPP CLIENT IS READY');
-        console.log('========================================');
+        console.log('✅ WhatsApp client is READY');
 
         this.isReady = true;
         this.isConnecting = false;
+        this.qrDataUrl = null;
+        this.lastError = null;
       });
 
       this.client.on('disconnected', (reason) => {
-        console.log(
-          '🔴 WhatsApp disconnected:',
-          reason
-        );
+        console.log('🔴 WhatsApp disconnected:', reason);
 
         this.isReady = false;
         this.isConnecting = false;
-        this.client = null;
-      });
-
-      this.client.on('change_state', (state) => {
-        console.log(
-          '[WhatsAppService] WhatsApp state:',
-          state
-        );
+        this.qrDataUrl = null;
       });
 
       this.client.on('message', async (message) => {
@@ -212,63 +131,17 @@ class WhatsAppService {
 
       this.isReady = false;
       this.isConnecting = false;
-
-      if (this.client) {
-        try {
-          await this.client.destroy();
-        } catch (cleanupError) {
-          console.error(
-            '[WhatsAppService] Cleanup error:',
-            cleanupError
-          );
-        }
-      }
-
-      this.client = null;
+      this.lastError = error.message;
 
       throw error;
     }
   }
 
-  async disconnect() {
-    try {
-      if (!this.client) {
-        this.isReady = false;
-        this.isConnecting = false;
-
-        return {
-          success: true,
-          message: 'WhatsApp is not connected.'
-        };
-      }
-
-      console.log('🔴 Stopping WhatsApp connection...');
-
-      await this.client.destroy();
-
-      this.client = null;
-      this.isReady = false;
-      this.isConnecting = false;
-
-      console.log('🔴 WhatsApp connection stopped');
-
-      return {
-        success: true,
-        message: 'WhatsApp connection stopped.'
-      };
-
-    } catch (error) {
-      console.error(
-        '[WhatsAppService] Disconnect error:',
-        error
-      );
-
-      this.client = null;
-      this.isReady = false;
-      this.isConnecting = false;
-
-      throw error;
-    }
+  getQR() {
+    return {
+      available: !!this.qrDataUrl,
+      qr: this.qrDataUrl
+    };
   }
 
   getStatus() {
@@ -283,8 +156,47 @@ class WhatsAppService {
     return {
       connected: this.isReady,
       connecting: this.isConnecting,
-      status
+      status,
+      qrAvailable: !!this.qrDataUrl,
+      error: this.lastError
     };
+  }
+
+  async disconnect() {
+    try {
+      if (!this.client) {
+        return {
+          success: true,
+          message: 'WhatsApp is not connected.'
+        };
+      }
+
+      await this.client.destroy();
+
+      this.client = null;
+      this.isReady = false;
+      this.isConnecting = false;
+      this.qrDataUrl = null;
+
+      console.log('🔴 WhatsApp connection stopped');
+
+      return {
+        success: true,
+        message: 'WhatsApp connection stopped.'
+      };
+
+    } catch (error) {
+      console.error(
+        '[WhatsAppService] Disconnect error:',
+        error
+      );
+
+      this.isReady = false;
+      this.isConnecting = false;
+      this.qrDataUrl = null;
+
+      throw error;
+    }
   }
 }
 
