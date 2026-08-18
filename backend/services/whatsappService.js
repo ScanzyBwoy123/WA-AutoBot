@@ -1,7 +1,6 @@
 const path = require('path');
 const fs = require('fs');
 
-const puppeteer = require('puppeteer');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 
@@ -24,7 +23,7 @@ class WhatsAppService {
   }
 
   getChromePath() {
-    // Use Render/environment Chrome if explicitly provided.
+    // Render/environment supplied Chrome
     if (
       process.env.CHROME_BIN &&
       fs.existsSync(process.env.CHROME_BIN)
@@ -37,25 +36,45 @@ class WhatsAppService {
       return process.env.CHROME_BIN;
     }
 
-    // Use the Chrome installed by Puppeteer.
-    const chromePath = puppeteer.executablePath();
-
-    console.log(
-      '[WhatsAppService] Puppeteer Chrome:',
-      chromePath
+    // Chrome installed by our package.json postinstall script.
+    const projectChromeRoot = path.resolve(
+      __dirname,
+      '../.puppeteer/chrome'
     );
 
-    if (chromePath && fs.existsSync(chromePath)) {
-      return chromePath;
+    console.log(
+      '[WhatsAppService] Searching project Chrome:',
+      projectChromeRoot
+    );
+
+    if (fs.existsSync(projectChromeRoot)) {
+      const versions = fs.readdirSync(projectChromeRoot);
+
+      for (const version of versions) {
+        const chromeLinuxPath = path.join(
+          projectChromeRoot,
+          version,
+          'chrome-linux64',
+          'chrome'
+        );
+
+        if (fs.existsSync(chromeLinuxPath)) {
+          console.log(
+            '[WhatsAppService] Chrome found:',
+            chromeLinuxPath
+          );
+
+          return chromeLinuxPath;
+        }
+      }
     }
 
     throw new Error(
-      `Chrome executable not found at: ${chromePath}`
+      `Chrome executable not found in project Puppeteer cache: ${projectChromeRoot}`
     );
   }
 
   async connect() {
-    // Never start a second browser.
     if (this.isReady) {
       return {
         success: true,
@@ -78,13 +97,16 @@ class WhatsAppService {
       const chromePath = this.getChromePath();
 
       console.log(
-        '[WhatsAppService] Chrome executable:',
+        '[WhatsAppService] Final Chrome executable:',
         chromePath
       );
 
       this.client = new Client({
         authStrategy: new LocalAuth({
-          dataPath: path.resolve(__dirname, '../.wwebjs_auth')
+          dataPath: path.resolve(
+            __dirname,
+            '../.wwebjs_auth'
+          )
         }),
 
         puppeteer: {
@@ -94,8 +116,6 @@ class WhatsAppService {
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
-
-            // Memory-saving options
             '--disable-dev-shm-usage',
             '--disable-gpu',
             '--disable-software-rasterizer',
@@ -109,28 +129,25 @@ class WhatsAppService {
             '--no-first-run',
             '--no-zygote',
 
-            // Reduce Chrome memory usage
+            // Keep Chrome as light as possible on Render.
             '--single-process',
             '--renderer-process-limit=1',
-            '--disable-features=Translate,BackForwardCache',
-            '--disable-ipc-flooding-protection'
+            '--disable-features=Translate,BackForwardCache'
           ]
         }
       });
 
       this.client.on('qr', (qr) => {
         console.log('');
-        console.log('==========================================');
+        console.log('========================================');
         console.log('📱 WHATSAPP QR CODE RECEIVED');
-        console.log('==========================================');
+        console.log('========================================');
 
         qrcode.generate(qr, {
           small: true
         });
 
-        console.log('==========================================');
-        console.log('Scan this QR code with WhatsApp.');
-        console.log('==========================================');
+        console.log('========================================');
       });
 
       this.client.on('authenticated', () => {
@@ -148,10 +165,9 @@ class WhatsAppService {
       });
 
       this.client.on('ready', () => {
-        console.log('');
-        console.log('==========================================');
+        console.log('========================================');
         console.log('✅ WHATSAPP CLIENT IS READY');
-        console.log('==========================================');
+        console.log('========================================');
 
         this.isReady = true;
         this.isConnecting = false;
@@ -176,18 +192,9 @@ class WhatsAppService {
       });
 
       this.client.on('message', async (message) => {
-        try {
-          console.log(
-            `📩 Message from ${message.from}: ${message.body}`
-          );
-
-          // Your bot commands can be added here later.
-        } catch (error) {
-          console.error(
-            '[WhatsAppService] Message handler error:',
-            error
-          );
-        }
+        console.log(
+          `📩 Message from ${message.from}: ${message.body}`
+        );
       });
 
       await this.client.initialize();
@@ -206,7 +213,6 @@ class WhatsAppService {
       this.isReady = false;
       this.isConnecting = false;
 
-      // Clean up failed client.
       if (this.client) {
         try {
           await this.client.destroy();
