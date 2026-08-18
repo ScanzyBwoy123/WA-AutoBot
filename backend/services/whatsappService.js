@@ -1,358 +1,968 @@
-this.client.on('message', async (message) => {
-  try {
-    // Ignore WhatsApp Status messages
-    if (message.from === 'status@broadcast') {
-      return;
-    }
+const { Client, LocalAuth } = require('whatsapp-web.js');
+const fs = require('fs');
+const path = require('path');
+const commands = require('../../commands');
 
-    const text = String(message.body || '').trim();
+class WhatsAppService {
+  constructor() {
+    this.client = null;
+    this.isReady = false;
+    this.isConnecting = false;
+    this.pairingCode = null;
+    this.lastError = null;
+    this.pairingRequested = false;
 
-    // Ignore empty/non-command messages
-    if (!text || !text.startsWith('.')) {
-      return;
-    }
-
-    // ==========================================
-    // OWNER / ACCESS CONTROL
-    // ==========================================
-
-    const ownerNumber = String(
-      process.env.OWNER_NUMBER || process.env.WHATSAPP_PHONE || ''
-    ).replace(/\D/g, '');
-
-    const normalizeNumber = (value) =>
-      String(value || '').replace(/\D/g, '');
-
-    const senderNumber = normalizeNumber(message.from);
-    const authorNumber = normalizeNumber(message.author);
-
-    /*
-     * WhatsApp can represent the owner's own chat using
-     * an @lid address, so also check the connected account.
-     */
-    let connectedNumber = '';
-
-    try {
-      connectedNumber = normalizeNumber(
-        this.client?.info?.wid?.user
-      );
-    } catch (_) {
-      connectedNumber = '';
-    }
-
-    const isOwner =
-      ownerNumber &&
-      (
-        senderNumber === ownerNumber ||
-        authorNumber === ownerNumber ||
-        connectedNumber === ownerNumber
-      );
-
-    /*
-     * IMPORTANT:
-     * Do NOT block owner messages just because message.fromMe === true.
-     */
-    if (message.fromMe && !isOwner) {
-      return;
-    }
-
-    // ==========================================
-    // APPROVED USERS
-    // ==========================================
-
-    if (!this.approvedUsers) {
-      this.approvedUsers = new Set();
-    }
-
-    // Always make OWNER_NUMBER an approved user.
-    if (ownerNumber) {
-      this.approvedUsers.add(ownerNumber);
-    }
-
-    const isApproved =
-      isOwner ||
-      this.approvedUsers.has(senderNumber) ||
-      this.approvedUsers.has(authorNumber);
-
-    // ==========================================
-    // PRIVATE BOT
-    // ==========================================
-
-    if (!isApproved) {
-      console.log(
-        `🚫 Blocked command from ${message.from}: ${text}`
-      );
-
-      try {
-        await message.reply(
-          '🔒 Access denied.\n\n' +
-          'This bot is private. Your WhatsApp number has not been approved by the owner.'
-        );
-      } catch (error) {
-        console.error(
-          '[Access Denied Reply Error]',
-          error.message
-        );
-      }
-
-      return;
-    }
+    this.approvedUsers = new Set();
+    this.loadApprovedUsers();
 
     console.log(
-      `📩 ${isOwner ? 'OWNER' : 'APPROVED USER'} command from ${message.from}: ${text}`
+      '[WhatsAppService] Stable Render WhatsApp service initialized'
     );
+  }
 
-    // ==========================================
-    // PARSE COMMAND
-    // ==========================================
+  init() {
+    return {
+      success: true,
+      message: 'WhatsApp service initialized.'
+    };
+  }
 
-    const parts = text
-      .slice(1)
-      .trim()
-      .split(/\s+/);
+  getOwnerNumber() {
+    return String(
+      process.env.OWNER_NUMBER ||
+      process.env.WHATSAPP_PHONE ||
+      ''
+    ).replace(/\D/g, '');
+  }
 
-    const commandName = (
-      parts.shift() || ''
-    ).toLowerCase();
+  getPhoneNumber() {
+    return String(
+      process.env.WHATSAPP_PHONE ||
+      process.env.OWNER_NUMBER ||
+      ''
+    ).replace(/\D/g, '');
+  }
 
-    const args = parts;
+  normalizeNumber(value) {
+    return String(value || '').replace(/\D/g, '');
+  }
 
-    // ==========================================
-    // OWNER-ONLY COMMANDS
-    // ==========================================
+  loadApprovedUsers() {
+    try {
+      const file = path.join(
+        process.cwd(),
+        'approved-users.json'
+      );
 
-    const ownerOnlyCommands = [
-      'adduser',
-      'removeuser',
-      'users',
-      'pair'
+      if (fs.existsSync(file)) {
+        const data = JSON.parse(
+          fs.readFileSync(file, 'utf8')
+        );
+
+        if (Array.isArray(data)) {
+          data
+            .map((n) => this.normalizeNumber(n))
+            .filter(Boolean)
+            .forEach((n) => {
+              this.approvedUsers.add(n);
+            });
+        }
+      }
+    } catch (error) {
+      console.error(
+        '[Access Control] Failed to load users:',
+        error.message
+      );
+    }
+
+    const owner = this.getOwnerNumber();
+
+    if (owner) {
+      this.approvedUsers.add(owner);
+    }
+  }
+
+  saveApprovedUsers() {
+    try {
+      const file = path.join(
+        process.cwd(),
+        'approved-users.json'
+      );
+
+      fs.writeFileSync(
+        file,
+        JSON.stringify(
+          Array.from(this.approvedUsers).sort(),
+          null,
+          2
+        )
+      );
+    } catch (error) {
+      console.error(
+        '[Access Control] Failed to save users:',
+        error.message
+      );
+    }
+  }
+
+  isOwner(message) {
+    const owner = this.getOwnerNumber();
+
+    if (!owner) {
+      return false;
+    }
+
+    const values = [
+      message.from,
+      message.author,
+      this.client?.info?.wid?.user
     ];
 
-    if (
-      ownerOnlyCommands.includes(commandName) &&
-      !isOwner
-    ) {
-      await message.reply(
-        '👑 This command is available to the bot owner only.'
-      );
-      return;
+    return values.some(
+      (value) =>
+        this.normalizeNumber(value) === owner
+    );
+  }
+
+  isApproved(message) {
+    if (this.isOwner(message)) {
+      return true;
     }
 
-    // ==========================================
-    // .adduser NUMBER
-    // ==========================================
+    return (
+      this.approvedUsers.has(
+        this.normalizeNumber(message.from)
+      ) ||
+      this.approvedUsers.has(
+        this.normalizeNumber(message.author)
+      )
+    );
+  }
 
-    if (commandName === 'adduser') {
-      const number = normalizeNumber(args[0]);
+  findChromeExecutable(directory) {
+    try {
+      const entries = fs.readdirSync(
+        directory,
+        {
+          withFileTypes: true
+        }
+      );
 
-      if (!number) {
-        await message.reply(
-          '❌ Usage:\n.adduser 233XXXXXXXXX'
+      for (const entry of entries) {
+        const fullPath = path.join(
+          directory,
+          entry.name
         );
-        return;
-      }
 
-      this.approvedUsers.add(number);
-
-      if (typeof this.saveApprovedUsers === 'function') {
-        this.saveApprovedUsers();
-      }
-
-      await message.reply(
-        `✅ User approved.\n\n📱 ${number}\n\nThey can now use the bot.`
-      );
-
-      console.log(
-        `✅ User approved by owner: ${number}`
-      );
-
-      return;
-    }
-
-    // ==========================================
-    // .removeuser NUMBER
-    // ==========================================
-
-    if (commandName === 'removeuser') {
-      const number = normalizeNumber(args[0]);
-
-      if (!number) {
-        await message.reply(
-          '❌ Usage:\n.removeuser 233XXXXXXXXX'
-        );
-        return;
-      }
-
-      if (number === ownerNumber) {
-        await message.reply(
-          '❌ You cannot remove the bot owner.'
-        );
-        return;
-      }
-
-      this.approvedUsers.delete(number);
-
-      if (typeof this.saveApprovedUsers === 'function') {
-        this.saveApprovedUsers();
-      }
-
-      await message.reply(
-        `✅ User removed.\n\n📱 ${number}\n\nThey can no longer use the bot.`
-      );
-
-      console.log(
-        `🚫 User removed by owner: ${number}`
-      );
-
-      return;
-    }
-
-    // ==========================================
-    // .users
-    // ==========================================
-
-    if (commandName === 'users') {
-      const users = Array.from(
-        this.approvedUsers
-      );
-
-      const list = users.length
-        ? users
-            .map((number, index) =>
-              `${index + 1}. ${number}`
-            )
-            .join('\n')
-        : 'No approved users.';
-
-      await message.reply(
-        `👥 *APPROVED USERS*\n\n${list}`
-      );
-
-      return;
-    }
-
-    // ==========================================
-    // .pair
-    // ==========================================
-
-    if (commandName === 'pair') {
-      if (this.pairingCode) {
-        await message.reply(
-          `🔑 *CURRENT PAIRING CODE*\n\n` +
-          `${this.pairingCode}\n\n` +
-          `Use WhatsApp → Settings → Linked Devices → Link a Device → Link with phone number instead.`
-        );
-        return;
-      }
-
-      if (this.isReady) {
-        await message.reply(
-          '✅ WhatsApp is already connected.'
-        );
-        return;
-      }
-
-      await message.reply(
-        '⏳ No pairing code is currently available.\n\nStart the bot from the dashboard first.'
-      );
-
-      return;
-    }
-
-    // ==========================================
-    // NORMAL COMMANDS
-    // ==========================================
-
-    const context = {
-      message,
-      client: this.client,
-      whatsapp: this,
-
-      from: message.from,
-      chat: message.from,
-      sender: message.author || message.from,
-
-      isOwner,
-      isApproved,
-
-      args,
-
-      reply: async (response) => {
         if (
-          response === undefined ||
-          response === null
+          entry.isFile() &&
+          entry.name === 'chrome'
         ) {
-          return null;
-        }
-
-        const replyText = String(response).trim();
-
-        if (!replyText) {
-          return null;
-        }
-
-        try {
-          return await message.reply(
-            replyText
-          );
-        } catch (replyError) {
-          console.error(
-            '[WhatsApp Reply Error]',
-            replyError.message
-          );
-
           try {
-            return await this.client.sendMessage(
-              message.from,
-              replyText
-            );
-          } catch (sendError) {
-            console.error(
-              '[WhatsApp Send Error]',
-              sendError.message
+            fs.accessSync(
+              fullPath,
+              fs.constants.X_OK
             );
 
-            throw sendError;
-          }
+            return fullPath;
+          } catch (_) {}
         }
       }
-    };
 
-    // ==========================================
-    // RUN EXISTING COMMAND SYSTEM
-    // ==========================================
+      for (const entry of entries) {
+        if (!entry.isDirectory()) {
+          continue;
+        }
 
-    const result = await commands.execute(
-      text,
-      context
-    );
+        if (
+          entry.name === 'node_modules' ||
+          entry.name === '.git'
+        ) {
+          continue;
+        }
 
-    if (
-      result !== undefined &&
-      result !== null
-    ) {
-      const response =
-        String(result).trim();
+        const result =
+          this.findChromeExecutable(
+            path.join(
+              directory,
+              entry.name
+            )
+          );
 
-      if (response) {
-        await context.reply(response);
+        if (result) {
+          return result;
+        }
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
+  getChromePath() {
+    const directPaths = [
+      process.env.CHROME_BIN,
+      process.env.PUPPETEER_EXECUTABLE_PATH,
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser'
+    ].filter(Boolean);
+
+    for (const chromePath of directPaths) {
+      if (fs.existsSync(chromePath)) {
+        console.log(
+          '[WhatsAppService] Chrome:',
+          chromePath
+        );
+
+        return chromePath;
       }
     }
 
-    console.log(
-      `✅ Command completed: ${text}`
-    );
+    const roots = [
+      process.env.PUPPETEER_CACHE_DIR,
+      path.join(
+        process.cwd(),
+        '.puppeteer'
+      ),
+      path.join(
+        process.cwd(),
+        'backend',
+        '.puppeteer'
+      ),
+      '/opt/render/.cache/puppeteer',
+      '/opt/render/project/src/.puppeteer',
+      '/opt/render/project/src/backend/.puppeteer'
+    ].filter(Boolean);
 
-  } catch (error) {
-    console.error(
-      '[Command Handler Error]',
-      error
+    for (const root of roots) {
+      if (!fs.existsSync(root)) {
+        continue;
+      }
+
+      const chrome =
+        this.findChromeExecutable(root);
+
+      if (chrome) {
+        console.log(
+          '[WhatsAppService] Chrome:',
+          chrome
+        );
+
+        return chrome;
+      }
+    }
+
+    throw new Error(
+      'Chrome executable not found.'
     );
+  }
+
+  async connect() {
+    if (this.isReady) {
+      return {
+        success: true,
+        message:
+          'WhatsApp is already connected.'
+      };
+    }
+
+    if (this.isConnecting) {
+      return {
+        success: true,
+        message:
+          'WhatsApp connection is already starting.'
+      };
+    }
+
+    this.isConnecting = true;
+    this.lastError = null;
+    this.pairingCode = null;
+    this.pairingRequested = false;
 
     try {
-      await message.reply(
-        '❌ Something went wrong while processing that command.'
+      const phoneNumber =
+        this.getPhoneNumber();
+
+      if (!phoneNumber) {
+        throw new Error(
+          'WHATSAPP_PHONE or OWNER_NUMBER is missing.'
+        );
+      }
+
+      console.log(
+        '🔄 Starting WhatsApp connection...'
       );
-    } catch (_) {}
+
+      const chromePath =
+        this.getChromePath();
+
+      this.client = new Client({
+        authStrategy: new LocalAuth({
+          clientId: 'wa-autobot',
+          dataPath: path.join(
+            process.cwd(),
+            '.wwebjs_auth'
+          )
+        }),
+
+        puppeteer: {
+          executablePath: chromePath,
+          headless: true,
+
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-extensions',
+            '--disable-background-networking',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-breakpad',
+            '--disable-component-extensions-with-background-pages',
+            '--disable-features=Translate,BackForwardCache',
+            '--disable-hang-monitor',
+            '--disable-ipc-flooding-protection',
+            '--disable-popup-blocking',
+            '--disable-renderer-backgrounding',
+            '--disable-sync',
+            '--metrics-recording-only',
+            '--mute-audio',
+            '--js-flags=--max-old-space-size=256'
+          ]
+        }
+      });
+
+      this.client.on(
+        'code',
+        (code) => {
+          this.pairingCode =
+            String(code);
+
+          console.log(
+            '🔑 WhatsApp pairing code:',
+            this.pairingCode
+          );
+        }
+      );
+
+      this.client.on(
+        'qr',
+        () => {
+          console.log(
+            'ℹ️ QR received and ignored.'
+          );
+        }
+      );
+
+      this.client.on(
+        'authenticated',
+        () => {
+          console.log(
+            '🔐 WhatsApp authenticated'
+          );
+
+          this.pairingCode = null;
+        }
+      );
+
+      this.client.on(
+        'ready',
+        () => {
+          console.log(
+            '✅ WhatsApp client is READY'
+          );
+
+          this.isReady = true;
+          this.isConnecting = false;
+          this.pairingCode = null;
+          this.lastError = null;
+        }
+      );
+
+      this.client.on(
+        'auth_failure',
+        (message) => {
+          console.error(
+            '❌ WhatsApp auth failure:',
+            message
+          );
+
+          this.isReady = false;
+          this.isConnecting = false;
+          this.pairingCode = null;
+          this.lastError =
+            String(message);
+        }
+      );
+
+      this.client.on(
+        'disconnected',
+        (reason) => {
+          console.log(
+            '🔴 WhatsApp disconnected:',
+            reason
+          );
+
+          this.isReady = false;
+          this.isConnecting = false;
+          this.pairingCode = null;
+        }
+      );
+
+      /*
+       * COMMAND HANDLER
+       */
+      this.client.on(
+        'message',
+        async (message) => {
+          try {
+            /*
+             * Ignore WhatsApp Status.
+             */
+            if (
+              message.from ===
+              'status@broadcast'
+            ) {
+              return;
+            }
+
+            const text =
+              String(
+                message.body || ''
+              ).trim();
+
+            if (!text) {
+              return;
+            }
+
+            /*
+             * Only commands.
+             */
+            if (!text.startsWith('.')) {
+              return;
+            }
+
+            /*
+             * OWNER CHECK
+             *
+             * IMPORTANT:
+             * We intentionally DO NOT reject
+             * message.fromMe here.
+             *
+             * This allows the owner to control
+             * the bot from their own DM.
+             */
+            const owner =
+              this.isOwner(message);
+
+            /*
+             * APPROVED USER CHECK
+             */
+            const approved =
+              this.isApproved(message);
+
+            /*
+             * Block everyone except owner
+             * or approved users.
+             */
+            if (!approved) {
+              console.log(
+                `🚫 Blocked command from ${message.from}: ${text}`
+              );
+
+              try {
+                await message.reply(
+                  '🔒 Access denied.\n\n' +
+                  'This bot is private. Ask the owner to approve your WhatsApp number.'
+                );
+              } catch (_) {}
+
+              return;
+            }
+
+            console.log(
+              `📩 ${
+                owner
+                  ? 'OWNER'
+                  : 'APPROVED USER'
+              } command from ${message.from}: ${text}`
+            );
+
+            /*
+             * Parse command.
+             */
+            const parts =
+              text
+                .slice(1)
+                .trim()
+                .split(/\s+/);
+
+            const commandName =
+              (
+                parts.shift() || ''
+              ).toLowerCase();
+
+            const args = parts;
+
+            /*
+             * OWNER ONLY COMMANDS
+             */
+            const ownerOnlyCommands = [
+              'adduser',
+              'removeuser',
+              'users',
+              'pair'
+            ];
+
+            if (
+              ownerOnlyCommands.includes(
+                commandName
+              ) &&
+              !owner
+            ) {
+              await message.reply(
+                '👑 This command is available to the bot owner only.'
+              );
+
+              return;
+            }
+
+            /*
+             * .adduser
+             */
+            if (
+              commandName ===
+              'adduser'
+            ) {
+              const number =
+                this.normalizeNumber(
+                  args[0]
+                );
+
+              if (!number) {
+                await message.reply(
+                  '❌ Usage:\n.adduser 233XXXXXXXXX'
+                );
+
+                return;
+              }
+
+              this.approvedUsers.add(
+                number
+              );
+
+              this.saveApprovedUsers();
+
+              await message.reply(
+                `✅ User approved.\n\n📱 ${number}\n\nThey can now use the bot.`
+              );
+
+              return;
+            }
+
+            /*
+             * .removeuser
+             */
+            if (
+              commandName ===
+              'removeuser'
+            ) {
+              const number =
+                this.normalizeNumber(
+                  args[0]
+                );
+
+              if (!number) {
+                await message.reply(
+                  '❌ Usage:\n.removeuser 233XXXXXXXXX'
+                );
+
+                return;
+              }
+
+              if (
+                number ===
+                this.getOwnerNumber()
+              ) {
+                await message.reply(
+                  '❌ You cannot remove the owner.'
+                );
+
+                return;
+              }
+
+              this.approvedUsers.delete(
+                number
+              );
+
+              this.saveApprovedUsers();
+
+              await message.reply(
+                `✅ User removed.\n\n📱 ${number}`
+              );
+
+              return;
+            }
+
+            /*
+             * .users
+             */
+            if (
+              commandName ===
+              'users'
+            ) {
+              const users =
+                Array.from(
+                  this.approvedUsers
+                );
+
+              const list =
+                users.length
+                  ? users
+                      .map(
+                        (number, index) =>
+                          `${index + 1}. ${number}`
+                      )
+                      .join('\n')
+                  : 'No approved users.';
+
+              await message.reply(
+                `👥 APPROVED USERS\n\n${list}`
+              );
+
+              return;
+            }
+
+            /*
+             * .pair
+             *
+             * This does NOT create another
+             * WhatsApp session. It only shows
+             * the current bot pairing code.
+             */
+            if (
+              commandName ===
+              'pair'
+            ) {
+              if (
+                this.pairingCode
+              ) {
+                await message.reply(
+                  `🔑 CURRENT PAIRING CODE\n\n${this.pairingCode}\n\nUse:\nWhatsApp → Settings → Linked Devices → Link with phone number instead.`
+                );
+
+                return;
+              }
+
+              if (this.isReady) {
+                await message.reply(
+                  '✅ WhatsApp is already connected.'
+                );
+
+                return;
+              }
+
+              await message.reply(
+                '⏳ No pairing code is currently available. Start the bot from the dashboard first.'
+              );
+
+              return;
+            }
+
+            /*
+             * EXISTING COMMAND SYSTEM
+             */
+            const context = {
+              message,
+              client:
+                this.client,
+              whatsapp:
+                this,
+
+              from:
+                message.from,
+
+              chat:
+                message.from,
+
+              sender:
+                message.author ||
+                message.from,
+
+              isOwner:
+                owner,
+
+              isApproved:
+                approved,
+
+              args,
+
+              reply:
+                async (
+                  response
+                ) => {
+                  if (
+                    response ===
+                      undefined ||
+                    response === null
+                  ) {
+                    return null;
+                  }
+
+                  const replyText =
+                    String(
+                      response
+                    ).trim();
+
+                  if (
+                    !replyText
+                  ) {
+                    return null;
+                  }
+
+                  try {
+                    return await message.reply(
+                      replyText
+                    );
+                  } catch (
+                    replyError
+                  ) {
+                    console.error(
+                      '[WhatsApp Reply Error]',
+                      replyError.message
+                    );
+
+                    return await this.client.sendMessage(
+                      message.from,
+                      replyText
+                    );
+                  }
+                }
+            };
+
+            const result =
+              await commands.execute(
+                text,
+                context
+              );
+
+            if (
+              result !==
+                undefined &&
+              result !== null
+            ) {
+              const response =
+                String(
+                  result
+                ).trim();
+
+              if (response) {
+                await context.reply(
+                  response
+                );
+              }
+            }
+
+            console.log(
+              `✅ Command completed: ${text}`
+            );
+
+          } catch (error) {
+            console.error(
+              '[Command Handler Error]',
+              error
+            );
+
+            try {
+              await message.reply(
+                '❌ Something went wrong while processing that command.'
+              );
+            } catch (_) {}
+          }
+        }
+      );
+
+      /*
+       * Initialize WhatsApp.
+       */
+      await this.client.initialize();
+
+      /*
+       * Request pairing code.
+       */
+      if (
+        !this.isReady &&
+        !this.pairingRequested
+      ) {
+        this.pairingRequested = true;
+
+        console.log(
+          '🔑 Requesting phone-number pairing code...'
+        );
+
+        try {
+          const code =
+            await this.client.requestPairingCode(
+              phoneNumber,
+              true,
+              180000
+            );
+
+          this.pairingCode =
+            String(code);
+
+          console.log(
+            '🔑 PAIRING CODE:',
+            this.pairingCode
+          );
+
+        } catch (error) {
+          console.error(
+            '[Pairing Code Error]',
+            error
+          );
+
+          this.pairingRequested =
+            false;
+
+          this.lastError =
+            error.message;
+
+          throw error;
+        }
+      }
+
+      return {
+        success: true,
+        message:
+          'WhatsApp pairing initialization started.'
+      };
+
+    } catch (error) {
+      console.error(
+        '[WhatsAppService] Connection error:',
+        error
+      );
+
+      this.isReady = false;
+      this.isConnecting = false;
+      this.pairingCode = null;
+      this.lastError =
+        error.message;
+
+      try {
+        if (this.client) {
+          await this.client.destroy();
+        }
+      } catch (_) {}
+
+      this.client = null;
+
+      throw error;
+    }
   }
-});
+
+  getQR() {
+    return {
+      available: false,
+      qr: null
+    };
+  }
+
+  getPairingCode() {
+    return {
+      available:
+        !!this.pairingCode,
+      pairingCode:
+        this.pairingCode
+    };
+  }
+
+  getStatus() {
+    let status =
+      'Disconnected';
+
+    if (this.isReady) {
+      status =
+        'Connected';
+    } else if (
+      this.isConnecting
+    ) {
+      status =
+        'Connecting';
+    }
+
+    return {
+      connected:
+        this.isReady,
+
+      connecting:
+        this.isConnecting,
+
+      status,
+
+      qrAvailable:
+        false,
+
+      pairingCodeAvailable:
+        !!this.pairingCode,
+
+      pairingCode:
+        this.pairingCode,
+
+      error:
+        this.lastError
+    };
+  }
+
+  async disconnect() {
+    try {
+      if (!this.client) {
+        return {
+          success: true,
+          message:
+            'WhatsApp is not connected.'
+        };
+      }
+
+      console.log(
+        '🔴 Stopping WhatsApp connection...'
+      );
+
+      await this.client.destroy();
+
+      this.client = null;
+      this.isReady = false;
+      this.isConnecting = false;
+      this.pairingCode = null;
+      this.pairingRequested = false;
+
+      return {
+        success: true,
+        message:
+          'WhatsApp connection stopped.'
+      };
+
+    } catch (error) {
+      console.error(
+        '[WhatsAppService] Disconnect error:',
+        error
+      );
+
+      this.client = null;
+      this.isReady = false;
+      this.isConnecting = false;
+      this.pairingCode = null;
+      this.pairingRequested = false;
+
+      throw error;
+    }
+  }
+}
+
+module.exports =
+  new WhatsAppService();
