@@ -106,6 +106,19 @@ class WhatsAppService {
   }
 
   isOwner(message) {
+    /*
+     * VERY IMPORTANT:
+     *
+     * message_create also receives messages
+     * sent by the bot owner.
+     *
+     * Therefore message.fromMe is treated as
+     * an owner message.
+     */
+    if (message && message.fromMe === true) {
+      return true;
+    }
+
     const owner = this.getOwnerNumber();
 
     if (!owner) {
@@ -113,8 +126,8 @@ class WhatsAppService {
     }
 
     const values = [
-      message.from,
-      message.author,
+      message?.from,
+      message?.author,
       this.client?.info?.wid?.user
     ];
 
@@ -129,13 +142,15 @@ class WhatsAppService {
       return true;
     }
 
+    const from =
+      this.normalizeNumber(message?.from);
+
+    const author =
+      this.normalizeNumber(message?.author);
+
     return (
-      this.approvedUsers.has(
-        this.normalizeNumber(message.from)
-      ) ||
-      this.approvedUsers.has(
-        this.normalizeNumber(message.author)
-      )
+      this.approvedUsers.has(from) ||
+      this.approvedUsers.has(author)
     );
   }
 
@@ -414,15 +429,21 @@ class WhatsAppService {
       );
 
       /*
-       * COMMAND HANDLER
+       * IMPORTANT:
+       *
+       * message_create receives both:
+       *
+       * 1. Incoming messages
+       * 2. Messages created/sent by the
+       *    connected WhatsApp account
+       *
+       * This is what allows the owner to
+       * use commands from their own DM.
        */
       this.client.on(
-        'message',
+        'message_create',
         async (message) => {
           try {
-            /*
-             * Ignore WhatsApp Status.
-             */
             if (
               message.from ===
               'status@broadcast'
@@ -439,48 +460,33 @@ class WhatsAppService {
               return;
             }
 
-            /*
-             * Only commands.
-             */
             if (!text.startsWith('.')) {
               return;
             }
 
-            /*
-             * OWNER CHECK
-             *
-             * IMPORTANT:
-             * We intentionally DO NOT reject
-             * message.fromMe here.
-             *
-             * This allows the owner to control
-             * the bot from their own DM.
-             */
             const owner =
               this.isOwner(message);
 
-            /*
-             * APPROVED USER CHECK
-             */
             const approved =
               this.isApproved(message);
 
             /*
-             * Block everyone except owner
-             * or approved users.
+             * Private bot:
+             *
+             * Owner = allowed
+             * Approved users = allowed
+             * Everyone else = blocked
              */
             if (!approved) {
               console.log(
                 `🚫 Blocked command from ${message.from}: ${text}`
               );
 
-              try {
-                await message.reply(
-                  '🔒 Access denied.\n\n' +
-                  'This bot is private. Ask the owner to approve your WhatsApp number.'
-                );
-              } catch (_) {}
-
+              /*
+               * Don't reply to strangers automatically.
+               * This prevents people from using the
+               * bot and avoids unnecessary messages.
+               */
               return;
             }
 
@@ -492,9 +498,6 @@ class WhatsAppService {
               } command from ${message.from}: ${text}`
             );
 
-            /*
-             * Parse command.
-             */
             const parts =
               text
                 .slice(1)
@@ -509,7 +512,7 @@ class WhatsAppService {
             const args = parts;
 
             /*
-             * OWNER ONLY COMMANDS
+             * OWNER-ONLY COMMANDS
              */
             const ownerOnlyCommands = [
               'adduser',
@@ -639,10 +642,6 @@ class WhatsAppService {
 
             /*
              * .pair
-             *
-             * This does NOT create another
-             * WhatsApp session. It only shows
-             * the current bot pairing code.
              */
             if (
               commandName ===
@@ -652,7 +651,7 @@ class WhatsAppService {
                 this.pairingCode
               ) {
                 await message.reply(
-                  `🔑 CURRENT PAIRING CODE\n\n${this.pairingCode}\n\nUse:\nWhatsApp → Settings → Linked Devices → Link with phone number instead.`
+                  `🔑 CURRENT PAIRING CODE\n\n${this.pairingCode}\n\nUse WhatsApp → Settings → Linked Devices → Link with phone number instead.`
                 );
 
                 return;
@@ -736,10 +735,21 @@ class WhatsAppService {
                       replyError.message
                     );
 
-                    return await this.client.sendMessage(
-                      message.from,
-                      replyText
-                    );
+                    try {
+                      return await this.client.sendMessage(
+                        message.from,
+                        replyText
+                      );
+                    } catch (
+                      sendError
+                    ) {
+                      console.error(
+                        '[WhatsApp Send Error]',
+                        sendError.message
+                      );
+
+                      throw sendError;
+                    }
                   }
                 }
             };
@@ -786,14 +796,8 @@ class WhatsAppService {
         }
       );
 
-      /*
-       * Initialize WhatsApp.
-       */
       await this.client.initialize();
 
-      /*
-       * Request pairing code.
-       */
       if (
         !this.isReady &&
         !this.pairingRequested
