@@ -13,7 +13,8 @@ class MultiAccountWhatsAppService {
     this.errors = new Map();
 
     this.statusMonitors = new Map();
-    this.statusSeen = new Map();
+    this.statusProcessed = new Map();
+    this.commandProcessed = new Set();
 
     this.sessionsDir = path.join(
       process.cwd(),
@@ -43,19 +44,11 @@ class MultiAccountWhatsAppService {
   }
 
   normalizeNumber(number) {
-    return String(number || '')
-      .replace(/\D/g, '');
+    return String(number || '').replace(/\D/g, '');
   }
 
   getSessionId(phone) {
     return `customer-${this.normalizeNumber(phone)}`;
-  }
-
-  getSessionPath(phone) {
-    return path.join(
-      this.sessionsDir,
-      this.getSessionId(phone)
-    );
   }
 
   getChromePath() {
@@ -74,7 +67,6 @@ class MultiAccountWhatsAppService {
           console.log(
             `[MultiAccountWhatsApp] Chrome: ${chromePath}`
           );
-
           return chromePath;
         }
       } catch (_) {}
@@ -97,9 +89,7 @@ class MultiAccountWhatsAppService {
 
         const entries = fs.readdirSync(
           directory,
-          {
-            withFileTypes: true
-          }
+          { withFileTypes: true }
         );
 
         for (const entry of entries) {
@@ -117,7 +107,6 @@ class MultiAccountWhatsAppService {
                 fullPath,
                 fs.constants.X_OK
               );
-
               return fullPath;
             } catch (_) {}
           }
@@ -151,7 +140,6 @@ class MultiAccountWhatsAppService {
         console.log(
           `[MultiAccountWhatsApp] Chrome: ${chrome}`
         );
-
         return chrome;
       }
     }
@@ -167,7 +155,7 @@ class MultiAccountWhatsAppService {
         message &&
         typeof message.reply === 'function'
       ) {
-        await message.reply(text);
+        await message.reply(String(text));
         return true;
       }
 
@@ -204,42 +192,39 @@ class MultiAccountWhatsAppService {
 
       const lower = body.toLowerCase();
 
-      const accepted = [
-        '.menu',
-        'menu',
-        '.status',
-        'status',
-        '.autoview',
-        'autoview',
-        '.start',
-        'start',
-        '.boot',
-        'boot',
-        '.boot status',
-        'boot status',
-        '.ping',
-        'ping',
-        '.about',
-        'about',
-        '.owner',
-        'owner',
-        '.support',
-        'support',
-        '.settings',
-        'settings'
-      ];
-
       const isCommand =
-        accepted.some(
-          (command) =>
-            lower === command ||
-            lower.startsWith(
-              `${command} `
-            )
-        );
+        /^[.!]?(menu|status|autoview|start|boot|ping|about|owner|support|settings)(\s|$)/i
+          .test(body);
 
       if (!isCommand) {
         return;
+      }
+
+      const messageId =
+        message.id &&
+        message.id._serialized
+          ? message.id._serialized
+          : `${message.from}:${body}`;
+
+      if (
+        this.commandProcessed.has(messageId)
+      ) {
+        return;
+      }
+
+      this.commandProcessed.add(
+        messageId
+      );
+
+      if (
+        this.commandProcessed.size > 5000
+      ) {
+        const first =
+          this.commandProcessed.values().next().value;
+
+        if (first) {
+          this.commandProcessed.delete(first);
+        }
       }
 
       console.log(
@@ -272,8 +257,7 @@ class MultiAccountWhatsAppService {
 
       if (
         !commandRouter ||
-        typeof commandRouter.execute !==
-          'function'
+        typeof commandRouter.execute !== 'function'
       ) {
         await this.safeReply(
           message,
@@ -283,16 +267,17 @@ class MultiAccountWhatsAppService {
         return;
       }
 
+      const client =
+        this.clients.get(phone);
+
       const context = {
-        client: this.clients.get(phone),
+        client,
         message,
         phone,
         from: message.from,
         chatId: message.from,
         account:
-          multiAccountService.getAccount(
-            phone
-          ),
+          multiAccountService.getAccount(phone),
         service: this,
         multiAccountService
       };
@@ -332,7 +317,7 @@ class MultiAccountWhatsAppService {
     }
   }
 
-  async markStatusAsSeen(
+  async viewStatusThroughWhatsAppWeb(
     client,
     broadcast,
     phone
@@ -342,70 +327,174 @@ class MultiAccountWhatsAppService {
         return false;
       }
 
-      let chat = null;
-
-      try {
-        if (
-          typeof broadcast.getChat ===
-          'function'
-        ) {
-          chat =
-            await broadcast.getChat();
-        }
-      } catch (_) {}
-
-      if (!chat) {
-        try {
-          if (
-            broadcast.id &&
-            broadcast.id._serialized
-          ) {
-            chat =
-              await client.getChatById(
-                broadcast.id._serialized
-              );
-          }
-        } catch (_) {}
-      }
-
-      if (!chat) {
-        console.log(
-          `⚠️ Could not resolve Status chat for ${phone}`
-        );
-
-        return false;
-      }
-
-      const chatId =
-        chat.id &&
-        chat.id._serialized
-          ? chat.id._serialized
+      const broadcastId =
+        broadcast.id &&
+        broadcast.id._serialized
+          ? broadcast.id._serialized
           : null;
 
-      if (!chatId) {
+      if (!broadcastId) {
         console.log(
-          `⚠️ Status chat has no usable ID for ${phone}`
+          `⚠️ Status has no usable broadcast ID for ${phone}`
         );
 
         return false;
       }
 
       console.log(
-        `👁️ Marking actual WhatsApp Status chat as seen for ${phone}: ${chatId}`
+        `👁️ Opening WhatsApp Status internally for ${phone}: ${broadcastId}`
       );
 
+      /*
+       * whatsapp-web.js does not expose a public
+       * "viewStatus()" method.
+       *
+       * Therefore we execute the operation inside
+       * WhatsApp Web's own browser context.
+       */
+
       const result =
-        await client.sendSeen(chatId);
+        await client.pupPage.evaluate(
+          async (statusId) => {
+            try {
+              const W =
+                window.Store;
+
+              if (!W) {
+                return {
+                  success: false,
+                  reason: 'STORE_UNAVAILABLE'
+                };
+              }
+
+              let broadcast =
+                null;
+
+              try {
+                if (
+                  W.Broadcasts &&
+                  typeof W.Broadcasts.get ===
+                    'function'
+                ) {
+                  broadcast =
+                    W.Broadcasts.get(statusId);
+                }
+              } catch (_) {}
+
+              if (!broadcast) {
+                try {
+                  if (
+                    W.Broadcasts &&
+                    typeof W.Broadcasts.find ===
+                      'function'
+                  ) {
+                    broadcast =
+                      W.Broadcasts.find(
+                        (item) =>
+                          item &&
+                          item.id &&
+                          (
+                            item.id._serialized ===
+                            statusId ||
+                            String(item.id) ===
+                            statusId
+                          )
+                      );
+                  }
+                } catch (_) {}
+              }
+
+              if (!broadcast) {
+                return {
+                  success: false,
+                  reason: 'BROADCAST_NOT_FOUND'
+                };
+              }
+
+              /*
+               * WhatsApp Web internally tracks status
+               * unread state. Try the supported internal
+               * methods in order.
+               */
+
+              const methods = [
+                'sendSeen',
+                'markRead',
+                'sendRead'
+              ];
+
+              for (const method of methods) {
+                try {
+                  if (
+                    typeof broadcast[method] ===
+                    'function'
+                  ) {
+                    await broadcast[method]();
+
+                    return {
+                      success: true,
+                      method
+                    };
+                  }
+                } catch (_) {}
+              }
+
+              /*
+               * Some WhatsApp Web builds keep the
+               * status unread counter on the broadcast.
+               */
+              try {
+                if (
+                  typeof W.sendSeen ===
+                  'function'
+                ) {
+                  await W.sendSeen(
+                    broadcast
+                  );
+
+                  return {
+                    success: true,
+                    method: 'Store.sendSeen'
+                  };
+                }
+              } catch (_) {}
+
+              return {
+                success: false,
+                reason: 'NO_STATUS_VIEW_METHOD'
+              };
+            } catch (error) {
+              return {
+                success: false,
+                reason:
+                  error.message ||
+                  'STATUS_VIEW_ERROR'
+              };
+            }
+          },
+          broadcastId
+        );
+
+      if (
+        result &&
+        result.success
+      ) {
+        console.log(
+          `✅ WhatsApp Status view operation completed for ${phone} using ${result.method}`
+        );
+
+        return true;
+      }
 
       console.log(
-        `👁️ WhatsApp Status sendSeen result for ${phone}:`,
+        `⚠️ WhatsApp Web could not perform Status view for ${phone}:`,
         result
       );
 
-      return Boolean(result);
+      return false;
     } catch (error) {
       console.error(
-        `❌ Actual Status view failed for ${phone}:`,
+        `❌ WhatsApp Status view failed for ${phone}:`,
         error.message
       );
 
@@ -423,13 +512,15 @@ class MultiAccountWhatsAppService {
       }
 
       const messages =
-        Array.isArray(
-          broadcast.msgs
-        )
+        Array.isArray(broadcast.msgs)
           ? broadcast.msgs
           : [];
 
       if (!messages.length) {
+        console.log(
+          `⚠️ No Status messages available for reaction for ${phone}`
+        );
+
         return false;
       }
 
@@ -445,9 +536,7 @@ class MultiAccountWhatsAppService {
             continue;
           }
 
-          await statusMessage.react(
-            '❤️'
-          );
+          await statusMessage.react('❤️');
 
           reacted = true;
 
@@ -473,9 +562,7 @@ class MultiAccountWhatsAppService {
     }
   }
 
-  async checkStatuses(
-    phone
-  ) {
+  async checkStatuses(phone) {
     const client =
       this.clients.get(phone);
 
@@ -484,19 +571,6 @@ class MultiAccountWhatsAppService {
     }
 
     try {
-      const account =
-        multiAccountService.getAccount(
-          phone
-        );
-
-      if (!account) {
-        return;
-      }
-
-      /*
-       * Only run automatic status viewing
-       * when Auto View is enabled.
-       */
       let settings = null;
 
       try {
@@ -510,11 +584,14 @@ class MultiAccountWhatsAppService {
             )
           );
 
-        settings =
+        if (
+          db &&
           typeof db.getSettings ===
-          'function'
-            ? db.getSettings()
-            : null;
+            'function'
+        ) {
+          settings =
+            db.getSettings();
+        }
       } catch (_) {}
 
       const autoView =
@@ -525,16 +602,12 @@ class MultiAccountWhatsAppService {
         return;
       }
 
-      /*
-       * whatsapp-web.js exposes actual WhatsApp
-       * Status/Story entries through getBroadcasts().
-       */
       if (
         typeof client.getBroadcasts !==
         'function'
       ) {
         console.log(
-          `⚠️ getBroadcasts() is unavailable for ${phone}`
+          `⚠️ getBroadcasts() unavailable for ${phone}`
         );
 
         return;
@@ -548,6 +621,18 @@ class MultiAccountWhatsAppService {
         broadcasts.length === 0
       ) {
         return;
+      }
+
+      let processed =
+        this.statusProcessed.get(phone);
+
+      if (!processed) {
+        processed = new Map();
+
+        this.statusProcessed.set(
+          phone,
+          processed
+        );
       }
 
       for (const broadcast of broadcasts) {
@@ -564,6 +649,10 @@ class MultiAccountWhatsAppService {
                   broadcast.id || ''
                 );
 
+          if (!broadcastId) {
+            continue;
+          }
+
           const unreadCount =
             Number(
               broadcast.unreadCount || 0
@@ -574,9 +663,6 @@ class MultiAccountWhatsAppService {
               broadcast.totalCount || 0
             );
 
-          /*
-           * No unseen statuses.
-           */
           if (
             unreadCount <= 0 &&
             totalCount <= 0
@@ -584,16 +670,35 @@ class MultiAccountWhatsAppService {
             continue;
           }
 
-          const previous =
-            this.statusSeen.get(
-              phone
-            ) || new Set();
+          const fingerprint =
+            `${unreadCount}:${totalCount}`;
 
           if (
-            broadcastId &&
-            previous.has(broadcastId)
+            processed.get(
+              broadcastId
+            ) === fingerprint
           ) {
             continue;
+          }
+
+          processed.set(
+            broadcastId,
+            fingerprint
+          );
+
+          /*
+           * Prevent the same Status from flooding
+           * the logs every 15 seconds.
+           */
+          if (
+            processed.size > 1000
+          ) {
+            const first =
+              processed.keys().next().value;
+
+            if (first) {
+              processed.delete(first);
+            }
           }
 
           console.log(
@@ -604,48 +709,34 @@ class MultiAccountWhatsAppService {
             `📊 Status ${broadcastId}: unread=${unreadCount}, total=${totalCount}`
           );
 
-          const seen =
-            await this.markStatusAsSeen(
+          const viewed =
+            await this.viewStatusThroughWhatsAppWeb(
               client,
               broadcast,
               phone
             );
 
-          if (seen) {
+          if (!viewed) {
             console.log(
-              `✅ Actual WhatsApp Status marked as seen for ${phone}`
+              `⚠️ Status detected but WhatsApp Web did not confirm the view for ${phone}`
             );
 
-            previous.add(
-              broadcastId
-            );
-
-            this.statusSeen.set(
-              phone,
-              previous
-            );
-
-            /*
-             * Give WhatsApp a short moment after
-             * marking the Status as seen before reacting.
-             */
-            await new Promise(
-              (resolve) =>
-                setTimeout(
-                  resolve,
-                  1200
-                )
-            );
-
-            await this.reactToStatus(
-              broadcast,
-              phone
-            );
-          } else {
-            console.log(
-              `⚠️ WhatsApp Status was detected but could not be confirmed as seen for ${phone}`
-            );
+            continue;
           }
+
+          /*
+           * Wait for WhatsApp Web to process the
+           * view before attempting the reaction.
+           */
+          await new Promise(
+            (resolve) =>
+              setTimeout(resolve, 1500)
+          );
+
+          await this.reactToStatus(
+            broadcast,
+            phone
+          );
         } catch (error) {
           console.error(
             `❌ Individual Status processing error for ${phone}:`,
@@ -671,9 +762,16 @@ class MultiAccountWhatsAppService {
     const timer =
       setInterval(
         async () => {
-          await this.checkStatuses(
-            phone
-          );
+          try {
+            await this.checkStatuses(
+              phone
+            );
+          } catch (error) {
+            console.error(
+              `[StatusMonitor] Error for ${phone}:`,
+              error.message
+            );
+          }
         },
         15000
       );
@@ -683,23 +781,22 @@ class MultiAccountWhatsAppService {
       timer
     );
 
-    /*
-     * Run immediately rather than waiting 15 seconds.
-     */
     setTimeout(
       () =>
-        this.checkStatuses(
-          phone
-        ),
+        this.checkStatuses(phone)
+          .catch((error) =>
+            console.error(
+              `[StatusMonitor] Initial check failed for ${phone}:`,
+              error.message
+            )
+          ),
       3000
     );
   }
 
   stopStatusMonitor(phone) {
     const timer =
-      this.statusMonitors.get(
-        phone
-      );
+      this.statusMonitors.get(phone);
 
     if (timer) {
       clearInterval(timer);
@@ -761,9 +858,7 @@ class MultiAccountWhatsAppService {
     }
 
     if (
-      this.connecting.has(
-        normalized
-      )
+      this.connecting.has(normalized)
     ) {
       return {
         success: true,
@@ -800,6 +895,7 @@ class MultiAccountWhatsAppService {
                 this.getSessionId(
                   normalized
                 ),
+
               dataPath:
                 this.sessionsDir
             }),
@@ -841,9 +937,6 @@ class MultiAccountWhatsAppService {
         client
       );
 
-      /*
-       * Pairing code.
-       */
       client.on(
         'code',
         (code) => {
@@ -866,10 +959,6 @@ class MultiAccountWhatsAppService {
         }
       );
 
-      /*
-       * QR is ignored because the
-       * customer uses phone-number pairing.
-       */
       client.on(
         'qr',
         () => {
@@ -897,10 +986,7 @@ class MultiAccountWhatsAppService {
       );
 
       /*
-       * IMPORTANT:
-       * Use "message" for received messages.
-       * message_create also includes messages created
-       * by the current account.
+       * Received commands.
        */
       client.on(
         'message',
@@ -913,8 +999,20 @@ class MultiAccountWhatsAppService {
       );
 
       /*
-       * READY.
+       * message_create is also registered because
+       * some WhatsApp Web builds deliver certain
+       * incoming events through it.
        */
+      client.on(
+        'message_create',
+        async (message) => {
+          await this.handleCommand(
+            message,
+            normalized
+          );
+        }
+      );
+
       client.on(
         'ready',
         () => {
@@ -949,9 +1047,6 @@ class MultiAccountWhatsAppService {
         }
       );
 
-      /*
-       * Authentication failure.
-       */
       client.on(
         'auth_failure',
         (message) => {
@@ -988,9 +1083,6 @@ class MultiAccountWhatsAppService {
         }
       );
 
-      /*
-       * Disconnected.
-       */
       client.on(
         'disconnected',
         (reason) => {
@@ -1028,15 +1120,16 @@ class MultiAccountWhatsAppService {
             normalized
           );
 
+          this.statusProcessed.delete(
+            normalized
+          );
+
           this.clients.delete(
             normalized
           );
         }
       );
 
-      /*
-       * Connection state logging.
-       */
       client.on(
         'change_state',
         (state) => {
@@ -1046,14 +1139,8 @@ class MultiAccountWhatsAppService {
         }
       );
 
-      /*
-       * Initialize WhatsApp Web.
-       */
       await client.initialize();
 
-      /*
-       * Request pairing code only if necessary.
-       */
       if (
         !client.info &&
         !this.pairingCodes.has(
@@ -1178,9 +1265,7 @@ class MultiAccountWhatsAppService {
       this.normalizeNumber(phone);
 
     const client =
-      this.clients.get(
-        normalized
-      );
+      this.clients.get(normalized);
 
     const account =
       multiAccountService.getAccount(
@@ -1197,8 +1282,7 @@ class MultiAccountWhatsAppService {
 
     if (
       account &&
-      account.status ===
-        'expired'
+      account.status === 'expired'
     ) {
       status = 'Expired';
     } else if (
@@ -1207,9 +1291,7 @@ class MultiAccountWhatsAppService {
     ) {
       status = 'Connected';
     } else if (
-      this.connecting.has(
-        normalized
-      )
+      this.connecting.has(normalized)
     ) {
       status = 'Connecting';
     }
@@ -1250,9 +1332,7 @@ class MultiAccountWhatsAppService {
     );
 
     const client =
-      this.clients.get(
-        normalized
-      );
+      this.clients.get(normalized);
 
     if (!client) {
       multiAccountService.setConnected(
@@ -1292,7 +1372,7 @@ class MultiAccountWhatsAppService {
       normalized
     );
 
-    this.statusSeen.delete(
+    this.statusProcessed.delete(
       normalized
     );
 
