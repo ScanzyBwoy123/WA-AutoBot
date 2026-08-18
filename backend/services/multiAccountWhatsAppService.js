@@ -249,7 +249,8 @@ class MultiAccountWhatsAppService {
       }
 
       if (
-        message.from === 'status@broadcast'
+        message.from === 'status@broadcast' ||
+        message.to === 'status@broadcast'
       ) {
         return;
       }
@@ -752,13 +753,16 @@ class MultiAccountWhatsAppService {
         normalized
       );
 
-    if (!accountCheck.exists) {
+    if (
+      !accountCheck ||
+      accountCheck.exists !== true
+    ) {
       throw new Error(
         'Account has not been registered.'
       );
     }
 
-    if (!accountCheck.active) {
+    if (accountCheck.active !== true) {
       throw new Error(
         'Your trial or subscription has expired. Please subscribe to continue.'
       );
@@ -866,25 +870,141 @@ class MultiAccountWhatsAppService {
         client
       );
 
+      /*
+       * ============================================================
+       * COMMAND SECURITY
+       * ============================================================
+       *
+       * ONLY the WhatsApp account that linked/paired this
+       * session can execute commands.
+       *
+       * OWNER:
+       *
+       * Own DM              -> ALLOWED
+       * Friend's DM         -> ALLOWED
+       * Group               -> ALLOWED
+       *
+       * OTHER PEOPLE:
+       *
+       * Friend's own DM     -> BLOCKED
+       * Unlinked number     -> BLOCKED
+       *
+       * The key check is message.fromMe === true.
+       *
+       * message_create is intentionally used here because it
+       * allows us to detect messages created/sent by the linked
+       * WhatsApp account.
+       *
+       * DO NOT add another client.on('message') command handler.
+       */
+
       client.on(
-        'code',
-        (code) => {
-          const pairingCode =
-            String(code || '');
+        'message_create',
+        async (message) => {
+          try {
+            if (!message) {
+              return;
+            }
 
-          this.pairingCodes.set(
-            normalized,
-            pairingCode
-          );
+            /*
+             * SECURITY CHECK #1
+             *
+             * The message MUST have been sent by the
+             * WhatsApp account that owns this session.
+             *
+             * If a friend sends:
+             *
+             * menu
+             * pin
+             * delete
+             * help
+             *
+             * message.fromMe will be false and the message
+             * will be ignored.
+             */
+            if (message.fromMe !== true) {
+              console.log(
+                `🚫 Unauthorized command blocked for linked account ${normalized}`
+              );
 
-          multiAccountService.setPairingCode(
-            normalized,
-            pairingCode
-          );
+              return;
+            }
 
-          console.log(
-            `🔑 Pairing code for ${normalized}: ${pairingCode}`
-          );
+            /*
+             * Never process WhatsApp Status as a command.
+             */
+            if (
+              message.from === 'status@broadcast' ||
+              message.to === 'status@broadcast'
+            ) {
+              return;
+            }
+
+            const body = String(
+              message.body || ''
+            ).trim();
+
+            /*
+             * Ignore empty messages.
+             */
+            if (!body) {
+              return;
+            }
+
+            /*
+             * SECURITY CHECK #2
+             *
+             * Confirm that the linked WhatsApp number
+             * is registered in the account system.
+             */
+            const accountCheck =
+              multiAccountService.checkAccount(
+                normalized
+              );
+
+            if (
+              !accountCheck ||
+              accountCheck.exists !== true
+            ) {
+              console.log(
+                `🚫 Command blocked: ${normalized} is not registered.`
+              );
+
+              return;
+            }
+
+            /*
+             * SECURITY CHECK #3
+             *
+             * The linked account must still be active.
+             */
+            if (accountCheck.active !== true) {
+              console.log(
+                `🚫 Command blocked: ${normalized} account is inactive.`
+              );
+
+              return;
+            }
+
+            console.log(
+              `📤 AUTHORIZED COMMAND from linked account ${normalized}: ${body}`
+            );
+
+            /*
+             * The linked owner can now execute the command
+             * in ANY chat where that linked WhatsApp account
+             * sends the command.
+             */
+            await this.handleCommand(
+              message,
+              normalized
+            );
+          } catch (error) {
+            console.error(
+              `❌ Authorized command handler error for ${normalized}:`,
+              error.message
+            );
+          }
         }
       );
 
@@ -914,22 +1034,18 @@ class MultiAccountWhatsAppService {
         }
       );
 
-      client.on(
-        'message',
-        async (message) => {
-          try {
-            await this.handleCommand(
-              message,
-              normalized
-            );
-          } catch (error) {
-            console.error(
-              `❌ Message handler error for ${normalized}:`,
-              error.message
-            );
-          }
-        }
-      );
+      /*
+       * IMPORTANT:
+       *
+       * There is intentionally NO:
+       *
+       * client.on('message', ...)
+       *
+       * command handler here.
+       *
+       * Incoming messages from friends must NOT be sent
+       * to handleCommand().
+       */
 
       client.on(
         'ready',
