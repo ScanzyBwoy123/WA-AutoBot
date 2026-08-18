@@ -16,81 +16,226 @@ function loadCommands() {
 
   for (const file of commandFiles) {
     try {
-      const command = require(path.join(__dirname, file));
+      const filePath = path.join(
+        __dirname,
+        file
+      );
 
-      if (!command || !command.name || typeof command.execute !== 'function') {
-        console.warn(`[Commands] Skipping invalid command: ${file}`);
+      delete require.cache[
+        require.resolve(filePath)
+      ];
+
+      const command = require(filePath);
+
+      if (
+        !command ||
+        typeof command !== 'object' ||
+        !command.name ||
+        typeof command.execute !== 'function'
+      ) {
+        console.warn(
+          `[Commands] Skipping invalid command: ${file}`
+        );
         continue;
       }
 
-      commands.set(command.name.toLowerCase(), command);
+      const name =
+        String(command.name)
+          .trim()
+          .toLowerCase();
 
-      if (Array.isArray(command.aliases)) {
-        for (const alias of command.aliases) {
-          commands.set(alias.toLowerCase(), command);
+      if (!name) {
+        continue;
+      }
+
+      commands.set(
+        name,
+        command
+      );
+
+      if (
+        Array.isArray(command.aliases)
+      ) {
+        for (
+          const alias of command.aliases
+        ) {
+          const aliasName =
+            String(alias)
+              .trim()
+              .toLowerCase();
+
+          if (aliasName) {
+            commands.set(
+              aliasName,
+              command
+            );
+          }
         }
       }
+
+      console.log(
+        `✅ Command loaded: ${name}`
+      );
     } catch (error) {
-      console.error(`[Commands] Failed to load ${file}:`, error.message);
+      console.error(
+        `[Commands] Failed to load ${file}:`,
+        error
+      );
     }
   }
+
+  console.log(
+    `✅ Command system loaded ${commands.size} command/alias entries`
+  );
 }
 
 function getCommandList() {
-  const uniqueCommands = new Map();
+  const uniqueCommands =
+    new Map();
 
-  for (const command of commands.values()) {
-    uniqueCommands.set(command.name, command);
+  for (
+    const command of commands.values()
+  ) {
+    const name =
+      String(command.name)
+        .trim()
+        .toLowerCase();
+
+    if (!uniqueCommands.has(name)) {
+      uniqueCommands.set(
+        name,
+        command
+      );
+    }
   }
 
-  return Array.from(uniqueCommands.values()).map((command) => ({
+  return Array.from(
+    uniqueCommands.values()
+  ).map((command) => ({
     name: command.name,
-    aliases: command.aliases || [],
-    category: command.category || 'General',
-    description: command.description || ''
+    aliases:
+      Array.isArray(command.aliases)
+        ? command.aliases
+        : [],
+    category:
+      command.category ||
+      'General',
+    description:
+      command.description ||
+      ''
   }));
 }
 
-async function execute(input, context = {}) {
-  if (!input || typeof input !== 'string') {
+function normalizeInput(input) {
+  let text =
+    String(input || '')
+      .trim();
+
+  if (!text) {
+    return {
+      name: '',
+      args: []
+    };
+  }
+
+  /*
+   * Support:
+   *
+   * .menu
+   * menu
+   * .ping
+   * ping
+   * .autoview on
+   * autoview on
+   */
+
+  if (text.startsWith('.')) {
+    text =
+      text
+        .slice(1)
+        .trim();
+  }
+
+  const parts =
+    text.split(/\s+/);
+
+  const name =
+    String(parts.shift() || '')
+      .trim()
+      .toLowerCase();
+
+  return {
+    name,
+    args: parts
+  };
+}
+
+async function execute(
+  input,
+  context = {}
+) {
+  if (
+    input === undefined ||
+    input === null
+  ) {
     return '⚠️ Please enter a command.';
   }
 
-  const trimmed = input.trim();
+  const {
+    name,
+    args
+  } = normalizeInput(input);
 
-  if (!trimmed) {
+  if (!name) {
     return '⚠️ Please enter a command.';
   }
 
-  const prefix = '.';
+  /*
+   * Reload commands if the command map
+   * somehow became empty.
+   */
 
-  const commandText = trimmed.startsWith(prefix)
-    ? trimmed.slice(prefix.length).trim()
-    : trimmed;
-
-  if (!commandText) {
-    return '⚠️ Please enter a command.';
+  if (commands.size === 0) {
+    loadCommands();
   }
 
-  const parts = commandText.split(/\s+/);
-  const commandName = parts.shift().toLowerCase();
-  const args = parts;
-
-  const command = commands.get(commandName);
+  const command =
+    commands.get(name);
 
   if (!command) {
-    return `❌ Unknown command: ${commandName}\nUse .menu to see available commands.`;
+    return (
+      `❌ Unknown command: ${name}\n` +
+      `Use .menu to see available commands.`
+    );
   }
 
   try {
-    return await command.execute(args, context);
-  } catch (error) {
-    console.error(`[Commands] ${commandName} failed:`, error);
+    const response =
+      await command.execute(
+        args,
+        context
+      );
 
-    return `❌ Command failed: ${error.message || 'Unknown error'}`;
+    return response;
+  } catch (error) {
+    console.error(
+      `[Commands] ${name} failed:`,
+      error
+    );
+
+    return (
+      `❌ Command failed: ${
+        error.message ||
+        'Unknown error'
+      }`
+    );
   }
 }
 
+/*
+ * Load all commands when the
+ * command system starts.
+ */
 loadCommands();
 
 module.exports = {
