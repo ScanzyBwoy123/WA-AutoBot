@@ -17,12 +17,29 @@ class MultiAccountWhatsAppService {
       '.wwebjs_multi_accounts'
     );
 
+    /*
+     * Check accounts every 60 seconds.
+     */
+    this.expiryCheckInterval = null;
+
     this.ensureSessionDirectory();
 
     console.log(
       '[MultiAccountWhatsApp] Multi-account engine initialized'
     );
+
+    /*
+     * Start automatic trial/subscription
+     * monitoring.
+     */
+    this.startExpiryMonitor();
   }
+
+  /*
+   * --------------------------------------------------
+   * STORAGE / DIRECTORIES
+   * --------------------------------------------------
+   */
 
   ensureSessionDirectory() {
     if (!fs.existsSync(this.sessionsDir)) {
@@ -48,6 +65,12 @@ class MultiAccountWhatsAppService {
     );
   }
 
+  /*
+   * --------------------------------------------------
+   * CHROME
+   * --------------------------------------------------
+   */
+
   getChromePath() {
     const directPaths = [
       process.env.CHROME_BIN,
@@ -60,6 +83,11 @@ class MultiAccountWhatsAppService {
 
     for (const chromePath of directPaths) {
       if (fs.existsSync(chromePath)) {
+        console.log(
+          '[MultiAccountWhatsApp] Chrome:',
+          chromePath
+        );
+
         return chromePath;
       }
     }
@@ -82,12 +110,13 @@ class MultiAccountWhatsAppService {
 
     const findChrome = (directory) => {
       try {
-        const entries = fs.readdirSync(
-          directory,
-          {
-            withFileTypes: true
-          }
-        );
+        const entries =
+          fs.readdirSync(
+            directory,
+            {
+              withFileTypes: true
+            }
+          );
 
         for (const entry of entries) {
           const fullPath =
@@ -113,6 +142,13 @@ class MultiAccountWhatsAppService {
 
         for (const entry of entries) {
           if (!entry.isDirectory()) {
+            continue;
+          }
+
+          if (
+            entry.name === 'node_modules' ||
+            entry.name === '.git'
+          ) {
             continue;
           }
 
@@ -142,6 +178,11 @@ class MultiAccountWhatsAppService {
         findChrome(root);
 
       if (chrome) {
+        console.log(
+          '[MultiAccountWhatsApp] Chrome:',
+          chrome
+        );
+
         return chrome;
       }
     }
@@ -150,6 +191,119 @@ class MultiAccountWhatsAppService {
       'Chrome executable not found.'
     );
   }
+
+  /*
+   * --------------------------------------------------
+   * AUTOMATIC EXPIRY MONITOR
+   * --------------------------------------------------
+   */
+
+  startExpiryMonitor() {
+    if (this.expiryCheckInterval) {
+      return;
+    }
+
+    console.log(
+      '⏱️ Starting automatic account expiry monitor...'
+    );
+
+    /*
+     * Run immediately.
+     */
+    this.checkExpiredAccounts();
+
+    /*
+     * Then check every 60 seconds.
+     */
+    this.expiryCheckInterval =
+      setInterval(
+        () => {
+          this.checkExpiredAccounts();
+        },
+        60 * 1000
+      );
+
+    /*
+     * Do not keep Node alive solely
+     * because of this timer.
+     */
+    if (
+      this.expiryCheckInterval &&
+      typeof this.expiryCheckInterval.unref ===
+        'function'
+    ) {
+      this.expiryCheckInterval.unref();
+    }
+  }
+
+  async checkExpiredAccounts() {
+    try {
+      const accounts =
+        multiAccountService.getAllAccounts();
+
+      if (!Array.isArray(accounts)) {
+        return;
+      }
+
+      for (const account of accounts) {
+        if (!account || !account.phone) {
+          continue;
+        }
+
+        const phone =
+          this.normalizeNumber(
+            account.phone
+          );
+
+        if (!phone) {
+          continue;
+        }
+
+        /*
+         * Only check active trial/paid accounts.
+         */
+        if (
+          account.status !== 'trial' &&
+          account.status !== 'paid'
+        ) {
+          continue;
+        }
+
+        const status =
+          multiAccountService.checkAccount(
+            phone
+          );
+
+        /*
+         * Account has expired.
+         */
+        if (
+          status &&
+          status.expired
+        ) {
+          console.log(
+            `⛔ Expiry detected for ${phone}: ${status.reason}`
+          );
+
+          await this.expireAccount(
+            phone,
+            status.reason
+          );
+        }
+      }
+    } catch (error) {
+      console.error(
+        '[Expiry Monitor] Error:',
+        error.message
+      );
+    }
+  }
+
+  /*
+   * --------------------------------------------------
+   * START CUSTOMER ACCOUNT
+   * --------------------------------------------------
+   */
 
   async startAccount(phone) {
     const normalized =
@@ -162,8 +316,7 @@ class MultiAccountWhatsAppService {
     }
 
     /*
-     * Check the customer's trial/payment status
-     * before starting WhatsApp.
+     * Check trial/subscription status.
      */
     const accountCheck =
       multiAccountService.checkAccount(
@@ -178,7 +331,10 @@ class MultiAccountWhatsAppService {
 
     if (!accountCheck.active) {
       throw new Error(
-        'Your trial or subscription has expired. Please subscribe to continue.'
+        accountCheck.reason ===
+          'TRIAL_EXPIRED'
+          ? 'Your 48-hour free trial has expired. Please subscribe to continue.'
+          : 'Your trial or subscription has expired. Please subscribe to continue.'
       );
     }
 
@@ -186,7 +342,9 @@ class MultiAccountWhatsAppService {
      * Already connected.
      */
     const existing =
-      this.clients.get(normalized);
+      this.clients.get(
+        normalized
+      );
 
     if (existing) {
       const existingInfo =
@@ -207,7 +365,7 @@ class MultiAccountWhatsAppService {
     }
 
     /*
-     * Prevent duplicate startup requests.
+     * Prevent duplicate startup.
      */
     if (
       this.connecting.has(
@@ -221,9 +379,17 @@ class MultiAccountWhatsAppService {
       };
     }
 
-    this.connecting.add(normalized);
-    this.errors.delete(normalized);
-    this.pairingCodes.delete(normalized);
+    this.connecting.add(
+      normalized
+    );
+
+    this.errors.delete(
+      normalized
+    );
+
+    this.pairingCodes.delete(
+      normalized
+    );
 
     try {
       const chromePath =
@@ -284,8 +450,11 @@ class MultiAccountWhatsAppService {
       );
 
       /*
-       * Pairing code.
+       * ------------------------------------------------
+       * PAIRING CODE
+       * ------------------------------------------------
        */
+
       client.on(
         'code',
         (code) => {
@@ -309,17 +478,22 @@ class MultiAccountWhatsAppService {
       );
 
       /*
-       * QR is intentionally ignored.
-       * Customers will use phone-number pairing.
+       * Ignore QR.
        */
       client.on(
         'qr',
         () => {
           console.log(
-            `ℹ️ QR received for ${normalized}; phone pairing is being used.`
+            `ℹ️ QR received for ${normalized}; phone-number pairing is being used.`
           );
         }
       );
+
+      /*
+       * ------------------------------------------------
+       * AUTHENTICATED
+       * ------------------------------------------------
+       */
 
       client.on(
         'authenticated',
@@ -339,8 +513,11 @@ class MultiAccountWhatsAppService {
       );
 
       /*
+       * ------------------------------------------------
        * READY
+       * ------------------------------------------------
        */
+
       client.on(
         'ready',
         () => {
@@ -360,6 +537,28 @@ class MultiAccountWhatsAppService {
             normalized
           );
 
+          /*
+           * Check one more time before marking
+           * the account connected.
+           */
+          const access =
+            multiAccountService.getAccountAccess(
+              normalized
+            );
+
+          if (!access.allowed) {
+            console.log(
+              `⛔ ${normalized} is no longer allowed to connect.`
+            );
+
+            this.expireAccount(
+              normalized,
+              access.reason
+            );
+
+            return;
+          }
+
           multiAccountService.setConnected(
             normalized,
             true
@@ -372,8 +571,11 @@ class MultiAccountWhatsAppService {
       );
 
       /*
-       * Authentication failure.
+       * ------------------------------------------------
+       * AUTH FAILURE
+       * ------------------------------------------------
        */
+
       client.on(
         'auth_failure',
         (message) => {
@@ -407,8 +609,11 @@ class MultiAccountWhatsAppService {
       );
 
       /*
-       * Disconnected.
+       * ------------------------------------------------
+       * DISCONNECTED
+       * ------------------------------------------------
        */
+
       client.on(
         'disconnected',
         (reason) => {
@@ -427,7 +632,10 @@ class MultiAccountWhatsAppService {
 
           this.errors.set(
             normalized,
-            String(reason || 'Disconnected')
+            String(
+              reason ||
+              'Disconnected'
+            )
           );
 
           multiAccountService.setConnected(
@@ -446,12 +654,18 @@ class MultiAccountWhatsAppService {
       );
 
       /*
-       * Automatically view and react to new statuses.
+       * ------------------------------------------------
+       * AUTOMATIC STATUS VIEW + REACTION
+       * ------------------------------------------------
        */
+
       client.on(
         'message_create',
         async (message) => {
           try {
+            /*
+             * Only statuses.
+             */
             if (
               message.from !==
               'status@broadcast'
@@ -459,12 +673,29 @@ class MultiAccountWhatsAppService {
               return;
             }
 
+            /*
+             * Make sure this customer is
+             * still active.
+             */
+            const access =
+              multiAccountService.getAccountAccess(
+                normalized
+              );
+
+            if (!access.allowed) {
+              console.log(
+                `⛔ Ignoring status because ${normalized} is expired.`
+              );
+
+              return;
+            }
+
             console.log(
-              `👀 New status for customer ${normalized}`
+              `👀 New WhatsApp status for customer ${normalized}`
             );
 
             /*
-             * Mark status as viewed.
+             * VIEW STATUS
              */
             try {
               const chat =
@@ -480,6 +711,10 @@ class MultiAccountWhatsAppService {
                 console.log(
                   `👁️ Status viewed for ${normalized}`
                 );
+              } else {
+                console.log(
+                  `⚠️ sendSeen() unavailable for ${normalized}`
+                );
               }
             } catch (error) {
               console.error(
@@ -489,7 +724,7 @@ class MultiAccountWhatsAppService {
             }
 
             /*
-             * React with ❤️.
+             * REACT WITH ❤️
              */
             try {
               if (
@@ -502,6 +737,10 @@ class MultiAccountWhatsAppService {
 
                 console.log(
                   `❤️ Status reaction sent for ${normalized}`
+                );
+              } else {
+                console.log(
+                  `⚠️ message.react() unavailable for ${normalized}`
                 );
               }
             } catch (error) {
@@ -520,13 +759,16 @@ class MultiAccountWhatsAppService {
       );
 
       /*
-       * Initialize WhatsApp Web.
+       * ------------------------------------------------
+       * INITIALIZE WHATSAPP
+       * ------------------------------------------------
        */
+
       await client.initialize();
 
       /*
-       * If the account is not already authenticated,
-       * request a phone-number pairing code.
+       * Request phone-number pairing code
+       * when needed.
        */
       if (
         !client.info &&
@@ -534,6 +776,26 @@ class MultiAccountWhatsAppService {
           normalized
         )
       ) {
+        /*
+         * Check account again before
+         * generating a pairing code.
+         */
+        const access =
+          multiAccountService.getAccountAccess(
+            normalized
+          );
+
+        if (!access.allowed) {
+          await this.expireAccount(
+            normalized,
+            access.reason
+          );
+
+          throw new Error(
+            'Account is no longer active.'
+          );
+        }
+
         console.log(
           `🔑 Requesting pairing code for ${normalized}...`
         );
@@ -621,9 +883,19 @@ class MultiAccountWhatsAppService {
         normalized
       );
 
+      this.pairingCodes.delete(
+        normalized
+      );
+
       throw error;
     }
   }
+
+  /*
+   * --------------------------------------------------
+   * PAIRING CODE
+   * --------------------------------------------------
+   */
 
   getPairingCode(phone) {
     const normalized =
@@ -635,10 +907,19 @@ class MultiAccountWhatsAppService {
       ) || null;
 
     return {
-      available: Boolean(code),
-      pairingCode: code
+      available:
+        Boolean(code),
+
+      pairingCode:
+        code
     };
   }
+
+  /*
+   * --------------------------------------------------
+   * STATUS
+   * --------------------------------------------------
+   */
 
   getStatus(phone) {
     const normalized =
@@ -667,26 +948,31 @@ class MultiAccountWhatsAppService {
       account.status ===
         'expired'
     ) {
-      status = 'Expired';
+      status =
+        'Expired';
     } else if (
       client &&
       client.info
     ) {
-      status = 'Connected';
+      status =
+        'Connected';
     } else if (
       this.connecting.has(
         normalized
       )
     ) {
-      status = 'Connecting';
+      status =
+        'Connecting';
     }
 
     return {
       connected:
-        status === 'Connected',
+        status ===
+        'Connected',
 
       connecting:
-        status === 'Connecting',
+        status ===
+        'Connecting',
 
       status,
 
@@ -703,7 +989,15 @@ class MultiAccountWhatsAppService {
     };
   }
 
-  async disconnectAccount(phone) {
+  /*
+   * --------------------------------------------------
+   * DISCONNECT
+   * --------------------------------------------------
+   */
+
+  async disconnectAccount(
+    phone
+  ) {
     const normalized =
       this.normalizeNumber(phone);
 
@@ -716,6 +1010,14 @@ class MultiAccountWhatsAppService {
       multiAccountService.setConnected(
         normalized,
         false
+      );
+
+      this.connecting.delete(
+        normalized
+      );
+
+      this.pairingCodes.delete(
+        normalized
       );
 
       return {
@@ -733,7 +1035,7 @@ class MultiAccountWhatsAppService {
       await client.destroy();
     } catch (error) {
       console.error(
-        '[MultiAccountWhatsApp] Disconnect error:',
+        `[MultiAccountWhatsApp] Disconnect error for ${normalized}:`,
         error.message
       );
     }
@@ -747,6 +1049,10 @@ class MultiAccountWhatsAppService {
     );
 
     this.pairingCodes.delete(
+      normalized
+    );
+
+    this.errors.delete(
       normalized
     );
 
@@ -766,30 +1072,85 @@ class MultiAccountWhatsAppService {
     };
   }
 
-  async expireAccount(phone) {
+  /*
+   * --------------------------------------------------
+   * EXPIRE + DISCONNECT
+   * --------------------------------------------------
+   */
+
+  async expireAccount(
+    phone,
+    reason
+  ) {
     const normalized =
       this.normalizeNumber(phone);
 
+    console.log(
+      `⛔ Expiring customer account ${normalized}: ${
+        reason || 'EXPIRED'
+      }`
+    );
+
+    /*
+     * Disconnect WhatsApp first.
+     */
     await this.disconnectAccount(
       normalized
     );
 
+    /*
+     * Then mark the account expired.
+     */
     multiAccountService.expireAccount(
+      normalized
+    );
+
+    /*
+     * Make sure the pairing code is gone.
+     */
+    this.pairingCodes.delete(
+      normalized
+    );
+
+    this.connecting.delete(
+      normalized
+    );
+
+    this.errors.delete(
       normalized
     );
 
     return {
       success: true,
+
       message:
-        'Account expired and disconnected.'
+        'Account expired and WhatsApp disconnected.',
+
+      phone:
+        normalized,
+
+      reason:
+        reason || 'EXPIRED'
     };
   }
+
+  /*
+   * --------------------------------------------------
+   * CONNECTED ACCOUNTS
+   * --------------------------------------------------
+   */
 
   getConnectedAccounts() {
     return Array.from(
       this.clients.keys()
     );
   }
+
+  /*
+   * --------------------------------------------------
+   * STATISTICS
+   * --------------------------------------------------
+   */
 
   getStats() {
     return {
