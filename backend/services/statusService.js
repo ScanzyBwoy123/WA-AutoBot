@@ -1,34 +1,72 @@
 // backend/services/statusService.js
 
-const statusState = new Map();
-const runningWorkers = new Map();
+'use strict';
+
+/*
+|--------------------------------------------------------------------------
+| WA-AutoBot Status Automation Service
+|--------------------------------------------------------------------------
+|
+| Handles:
+|   • Auto View
+|   • Auto Like / Auto React
+|   • WhatsApp Status detection
+|
+| IMPORTANT:
+|   This service NEVER calls client.getBroadcasts().
+|   This avoids the WWebJS.getAllStatuses() problem.
+|
+|--------------------------------------------------------------------------
+*/
+
+const states = new Map();
+const workers = new Map();
+
+/*
+|--------------------------------------------------------------------------
+| HELPERS
+|--------------------------------------------------------------------------
+*/
 
 function normalizePhone(phone) {
   return String(phone || '').replace(/\D/g, '');
 }
 
 function getState(phone) {
-  const normalized = normalizePhone(phone);
+  const id = normalizePhone(phone);
 
-  if (!statusState.has(normalized)) {
-    statusState.set(normalized, {
+  if (!states.has(id)) {
+    states.set(id, {
       autoView: false,
       autoLike: false,
       emoji: '❤️',
       processed: new Set(),
-      lastRun: 0
+      lastStatusAt: 0,
+      detected: 0,
+      viewed: 0,
+      liked: 0,
+      errors: 0
     });
   }
 
-  return statusState.get(normalized);
+  return states.get(id);
 }
+
+/*
+|--------------------------------------------------------------------------
+| SETTINGS
+|--------------------------------------------------------------------------
+*/
 
 function setAutoView(phone, enabled) {
   const state = getState(phone);
+
   state.autoView = Boolean(enabled);
 
   console.log(
-    `[StatusService] Auto View ${state.autoView ? 'ENABLED' : 'DISABLED'} for ${normalizePhone(phone)}`
+    `[StatusService] Auto View ${
+      state.autoView ? 'ENABLED' : 'DISABLED'
+    } for ${normalizePhone(phone)}`
   );
 
   return state.autoView;
@@ -44,7 +82,9 @@ function setAutoLike(phone, enabled, emoji = '❤️') {
   }
 
   console.log(
-    `[StatusService] Auto Like ${state.autoLike ? 'ENABLED' : 'DISABLED'} for ${normalizePhone(phone)}`
+    `[StatusService] Auto Like ${
+      state.autoLike ? 'ENABLED' : 'DISABLED'
+    } for ${normalizePhone(phone)}`
   );
 
   return state.autoLike;
@@ -62,19 +102,28 @@ function setEmoji(phone, emoji) {
 
 function getStatus(phone) {
   const state = getState(phone);
+  const id = normalizePhone(phone);
 
   return {
+    phone: id,
     autoView: state.autoView,
     autoLike: state.autoLike,
     emoji: state.emoji,
+    running: workers.has(id),
+    detected: state.detected,
+    viewed: state.viewed,
+    liked: state.liked,
+    errors: state.errors,
     processedStatuses: state.processed.size,
-    running: runningWorkers.has(normalizePhone(phone))
+    lastStatusAt: state.lastStatusAt
+      ? new Date(state.lastStatusAt).toISOString()
+      : null
   };
 }
 
 /*
 |--------------------------------------------------------------------------
-| STATUS MESSAGE DETECTION
+| STATUS DETECTION
 |--------------------------------------------------------------------------
 */
 
@@ -83,20 +132,40 @@ function isStatusMessage(message) {
     return false;
   }
 
+  const from = String(message.from || '');
+  const to = String(message.to || '');
+  const author = String(message.author || '');
+
+  /*
+   * Normal WhatsApp Status identifier.
+   */
   if (
-    message.from === 'status@broadcast' ||
-    message.to === 'status@broadcast'
+    from === 'status@broadcast' ||
+    to === 'status@broadcast' ||
+    author === 'status@broadcast'
   ) {
     return true;
   }
 
+  /*
+   * Some versions expose isStatus.
+   */
   if (message.isStatus === true) {
     return true;
   }
 
+  /*
+   * Check message ID.
+   */
+  const serialized =
+    String(message.id?._serialized || '');
+
+  const remote =
+    String(message.id?.remote || '');
+
   if (
-    message.id &&
-    String(message.id.remote || '').includes('status@broadcast')
+    serialized.includes('status@broadcast') ||
+    remote.includes('status@broadcast')
   ) {
     return true;
   }
@@ -111,33 +180,50 @@ function isStatusMessage(message) {
 */
 
 function getStatusId(message) {
-  try {
-    if (!message) {
-      return null;
-    }
-
-    if (
-      message.id &&
-      message.id._serialized
-    ) {
-      return message.id._serialized;
-    }
-
-    if (
-      message.id &&
-      message.id.id
-    ) {
-      return String(message.id.id);
-    }
-
-    return [
-      message.from || '',
-      message.author || '',
-      message.timestamp || '',
-      message.body || ''
-    ].join(':');
-  } catch (_) {
+  if (!message) {
     return null;
+  }
+
+  if (message.id?._serialized) {
+    return String(message.id._serialized);
+  }
+
+  if (message.id?.id) {
+    return String(message.id.id);
+  }
+
+  return [
+    message.from || '',
+    message.author || '',
+    message.timestamp || '',
+    message.body || '',
+    message.type || ''
+  ].join('|');
+}
+
+/*
+|--------------------------------------------------------------------------
+| MARK PROCESSED
+|--------------------------------------------------------------------------
+*/
+
+function markProcessed(state, id) {
+  if (!id) {
+    return;
+  }
+
+  state.processed.add(id);
+
+  /*
+   * Keep memory under control.
+   */
+  if (state.processed.size > 5000) {
+    const first =
+      state.processed.values().next().value;
+
+    if (first) {
+      state.processed.delete(first);
+    }
   }
 }
 
@@ -147,30 +233,21 @@ function getStatusId(message) {
 |--------------------------------------------------------------------------
 */
 
-async function processAutoView(client, statusMessage) {
+async function processAutoView(client, message) {
+  if (!client || !message) {
+    return false;
+  }
+
   try {
-    if (!client || !statusMessage) {
-      return false;
-    }
-
-    if (!isStatusMessage(statusMessage)) {
-      return false;
-    }
-
     /*
-     * The old implementation called:
-     *
-     * client.getBroadcasts()
-     *
-     * That is intentionally NOT used here.
+     * Preferred method.
      */
-
-    try {
-      if (
-        typeof statusMessage.getChat === 'function'
-      ) {
+    if (
+      typeof message.getChat === 'function'
+    ) {
+      try {
         const chat =
-          await statusMessage.getChat();
+          await message.getChat();
 
         if (
           chat &&
@@ -179,48 +256,47 @@ async function processAutoView(client, statusMessage) {
           await chat.sendSeen();
 
           console.log(
-            `[Auto View] Status viewed successfully`
+            `[Auto View] SUCCESS: status viewed`
           );
 
           return true;
         }
+      } catch (error) {
+        console.log(
+          `[Auto View] getChat/sendSeen failed: ${error.message}`
+        );
       }
-    } catch (error) {
-      console.log(
-        `[Auto View] getChat/sendSeen failed: ${error.message}`
-      );
     }
 
     /*
-     * Fallback: use client.sendSeen when available.
+     * Fallback.
      */
+    if (
+      typeof client.sendSeen === 'function'
+    ) {
+      const target =
+        message.from ||
+        message.author;
 
-    try {
-      if (
-        typeof client.sendSeen === 'function' &&
-        statusMessage.from
-      ) {
-        await client.sendSeen(
-          statusMessage.from
-        );
+      if (target) {
+        await client.sendSeen(target);
 
         console.log(
-          `[Auto View] Status viewed using client.sendSeen()`
+          `[Auto View] SUCCESS using client.sendSeen()`
         );
 
         return true;
       }
-    } catch (error) {
-      console.log(
-        `[Auto View] client.sendSeen failed: ${error.message}`
-      );
     }
+
+    console.error(
+      '[Auto View] No supported viewing method available.'
+    );
 
     return false;
   } catch (error) {
     console.error(
-      '[Auto View Error]:',
-      error.message
+      `[Auto View] FAILED: ${error.message}`
     );
 
     return false;
@@ -235,20 +311,16 @@ async function processAutoView(client, statusMessage) {
 
 async function processAutoLike(
   client,
-  statusMessage,
-  customEmoji = '❤️'
+  message,
+  emoji = '❤️'
 ) {
+  if (!client || !message) {
+    return false;
+  }
+
   try {
-    if (!client || !statusMessage) {
-      return false;
-    }
-
-    if (!isStatusMessage(statusMessage)) {
-      return false;
-    }
-
     if (
-      typeof statusMessage.react !== 'function'
+      typeof message.react !== 'function'
     ) {
       console.error(
         '[Auto Like] Message.react() is unavailable.'
@@ -257,22 +329,19 @@ async function processAutoLike(
       return false;
     }
 
-    const emoji =
-      String(customEmoji || '❤️');
+    const reaction =
+      String(emoji || '❤️');
 
-    await statusMessage.react(
-      emoji
-    );
+    await message.react(reaction);
 
     console.log(
-      `[Auto Like] Reacted ${emoji} to Status`
+      `[Auto Like] SUCCESS: reacted ${reaction}`
     );
 
     return true;
   } catch (error) {
     console.error(
-      '[Auto Like Error]:',
-      error.message
+      `[Auto Like] FAILED: ${error.message}`
     );
 
     return false;
@@ -281,7 +350,7 @@ async function processAutoLike(
 
 /*
 |--------------------------------------------------------------------------
-| PROCESS ONE STATUS
+| PROCESS STATUS
 |--------------------------------------------------------------------------
 */
 
@@ -290,13 +359,13 @@ async function processStatus(
   phone,
   message
 ) {
+  const id =
+    normalizePhone(phone);
+
+  const state =
+    getState(id);
+
   try {
-    const normalized =
-      normalizePhone(phone);
-
-    const state =
-      getState(normalized);
-
     if (!isStatusMessage(message)) {
       return {
         success: false,
@@ -315,39 +384,46 @@ async function processStatus(
     }
 
     /*
-     * Prevent duplicate processing.
+     * Prevent duplicate reactions/views.
      */
-
     if (
       state.processed.has(statusId)
     ) {
       return {
         success: true,
-        alreadyProcessed: true
+        duplicate: true,
+        statusId
       };
     }
+
+    state.detected++;
+    state.lastStatusAt = Date.now();
+
+    console.log(
+      `[StatusService] STATUS DETECTED for ${id}`
+    );
 
     let viewed = false;
     let liked = false;
 
     /*
-     * Auto View
+     * AUTO VIEW
      */
-
     if (state.autoView) {
       viewed =
         await processAutoView(
           client,
           message
         );
+
+      if (viewed) {
+        state.viewed++;
+      }
     }
 
     /*
-     * Auto Like
-     *
-     * Only attempt reaction when enabled.
+     * AUTO LIKE
      */
-
     if (state.autoLike) {
       liked =
         await processAutoLike(
@@ -355,41 +431,33 @@ async function processStatus(
           message,
           state.emoji
         );
+
+      if (liked) {
+        state.liked++;
+      }
     }
 
     /*
-     * Mark processed only after attempting
-     * the enabled automation.
+     * Only mark it processed after
+     * an enabled operation succeeds,
+     * or if nothing was enabled.
      */
-
     if (
       viewed ||
       liked ||
       (!state.autoView &&
         !state.autoLike)
     ) {
-      state.processed.add(
+      markProcessed(
+        state,
         statusId
       );
     }
 
-    /*
-     * Keep memory under control.
-     */
-
-    if (
-      state.processed.size > 5000
-    ) {
-      const first =
-        state.processed.values()
-          .next().value;
-
-      if (first) {
-        state.processed.delete(
-          first
-        );
-      }
-    }
+    console.log(
+      `[StatusService] Result for ${id}: ` +
+      `viewed=${viewed}, liked=${liked}`
+    );
 
     return {
       success: viewed || liked,
@@ -398,8 +466,10 @@ async function processStatus(
       statusId
     };
   } catch (error) {
+    state.errors++;
+
     console.error(
-      `[StatusService] Failed processing Status for ${phone}:`,
+      `[StatusService] Status processing error for ${id}:`,
       error.message
     );
 
@@ -412,7 +482,7 @@ async function processStatus(
 
 /*
 |--------------------------------------------------------------------------
-| MESSAGE EVENT HANDLER
+| EVENT HANDLER
 |--------------------------------------------------------------------------
 */
 
@@ -421,57 +491,58 @@ async function handleMessage(
   phone,
   message
 ) {
-  try {
-    const normalized =
-      normalizePhone(phone);
+  const id =
+    normalizePhone(phone);
 
-    const state =
-      getState(normalized);
+  const state =
+    getState(id);
 
-    if (
-      !state.autoView &&
-      !state.autoLike
-    ) {
-      return null;
-    }
-
-    if (
-      !isStatusMessage(message)
-    ) {
-      return null;
-    }
-
-    console.log(
-      `[StatusService] Status detected for ${normalized}`
-    );
-
-    return await processStatus(
-      client,
-      normalized,
-      message
-    );
-  } catch (error) {
-    console.error(
-      '[StatusService] Message handler error:',
-      error.message
-    );
-
+  if (
+    !state.autoView &&
+    !state.autoLike
+  ) {
     return null;
   }
+
+  if (
+    !isStatusMessage(message)
+  ) {
+    return null;
+  }
+
+  return processStatus(
+    client,
+    id,
+    message
+  );
 }
 
 /*
 |--------------------------------------------------------------------------
-| WORKER
+| INSTALL EVENT LISTENERS
 |--------------------------------------------------------------------------
-|
-| IMPORTANT:
-|
-| This worker does NOT use getBroadcasts().
-|
-| It simply remains attached to the WhatsApp
-| client and processes Status messages received
-| through the event pipeline.
+*/
+
+function attachEvent(
+  client,
+  event,
+  handler
+) {
+  if (
+    client &&
+    typeof client.on === 'function'
+  ) {
+    client.on(event, handler);
+
+    return true;
+  }
+
+  return false;
+}
+
+/*
+|--------------------------------------------------------------------------
+| START STATUS WORKER
 |--------------------------------------------------------------------------
 */
 
@@ -479,58 +550,110 @@ function startStatusWorker(
   client,
   phone
 ) {
-  const normalized =
+  const id =
     normalizePhone(phone);
 
-  stopStatusWorker(normalized);
-
   if (!client) {
+    console.error(
+      `[StatusService] Cannot start worker for ${id}: client missing`
+    );
+
     return false;
   }
 
-  const state =
-    getState(normalized);
+  /*
+   * Prevent duplicate workers.
+   */
+  stopStatusWorker(id);
+
+  const handlers = [];
 
   /*
-   * Listen for messages created/received
-   * by this WhatsApp Web client.
+   * --------------------------------------------------
+   * message
+   * --------------------------------------------------
    */
 
-  const handler =
+  const messageHandler =
     async (message) => {
       try {
         await handleMessage(
           client,
-          normalized,
+          id,
           message
         );
       } catch (error) {
         console.error(
-          `[StatusService] Worker error for ${normalized}:`,
-          error.message
+          `[StatusService] message handler error: ${error.message}`
         );
       }
     };
 
-  client.on(
-    'message_create',
-    handler
-  );
-
-  runningWorkers.set(
-    normalized,
-    {
+  if (
+    attachEvent(
       client,
-      handler,
-      startedAt: Date.now()
-    }
-  );
+      'message',
+      messageHandler
+    )
+  ) {
+    handlers.push({
+      event: 'message',
+      handler: messageHandler
+    });
+  }
 
-  state.lastRun =
-    Date.now();
+  /*
+   * --------------------------------------------------
+   * message_create
+   * --------------------------------------------------
+   */
+
+  const messageCreateHandler =
+    async (message) => {
+      try {
+        await handleMessage(
+          client,
+          id,
+          message
+        );
+      } catch (error) {
+        console.error(
+          `[StatusService] message_create handler error: ${error.message}`
+        );
+      }
+    };
+
+  if (
+    attachEvent(
+      client,
+      'message_create',
+      messageCreateHandler
+    )
+  ) {
+    handlers.push({
+      event: 'message_create',
+      handler: messageCreateHandler
+    });
+  }
+
+  /*
+   * --------------------------------------------------
+   * Store worker
+   * --------------------------------------------------
+   */
+
+  workers.set(id, {
+    client,
+    handlers,
+    startedAt: Date.now()
+  });
 
   console.log(
-    `[StatusService] Status worker started for ${normalized}`
+    `[StatusService] Status worker started for ${id}`
+  );
+
+  console.log(
+    `[StatusService] Listening for WhatsApp Status events for ${id}`
   );
 
   return true;
@@ -538,18 +661,16 @@ function startStatusWorker(
 
 /*
 |--------------------------------------------------------------------------
-| STOP WORKER
+| STOP STATUS WORKER
 |--------------------------------------------------------------------------
 */
 
 function stopStatusWorker(phone) {
-  const normalized =
+  const id =
     normalizePhone(phone);
 
   const worker =
-    runningWorkers.get(
-      normalized
-    );
+    workers.get(id);
 
   if (!worker) {
     return false;
@@ -561,24 +682,26 @@ function stopStatusWorker(phone) {
       typeof worker.client.removeListener ===
         'function'
     ) {
-      worker.client.removeListener(
-        'message_create',
-        worker.handler
-      );
+      for (
+        const item of worker.handlers
+      ) {
+        worker.client.removeListener(
+          item.event,
+          item.handler
+        );
+      }
     }
   } catch (error) {
     console.error(
-      `[StatusService] Failed stopping worker for ${normalized}:`,
+      `[StatusService] Failed stopping worker for ${id}:`,
       error.message
     );
   }
 
-  runningWorkers.delete(
-    normalized
-  );
+  workers.delete(id);
 
   console.log(
-    `[StatusService] Status worker stopped for ${normalized}`
+    `[StatusService] Status worker stopped for ${id}`
   );
 
   return true;
@@ -586,7 +709,7 @@ function stopStatusWorker(phone) {
 
 /*
 |--------------------------------------------------------------------------
-| CLEAR PROCESSED STATUS CACHE
+| CACHE
 |--------------------------------------------------------------------------
 */
 
@@ -596,25 +719,29 @@ function clearProcessed(phone) {
 
   state.processed.clear();
 
+  console.log(
+    `[StatusService] Status cache cleared for ${normalizePhone(phone)}`
+  );
+
   return true;
 }
 
 /*
 |--------------------------------------------------------------------------
-| RESET ACCOUNT
+| RESET
 |--------------------------------------------------------------------------
 */
 
 function reset(phone) {
-  const normalized =
+  const id =
     normalizePhone(phone);
 
-  stopStatusWorker(
-    normalized
-  );
+  stopStatusWorker(id);
 
-  statusState.delete(
-    normalized
+  states.delete(id);
+
+  console.log(
+    `[StatusService] State reset for ${id}`
   );
 
   return true;
@@ -622,7 +749,25 @@ function reset(phone) {
 
 /*
 |--------------------------------------------------------------------------
-| EXPORTS
+| MANUAL STATUS PROCESSING
+|--------------------------------------------------------------------------
+*/
+
+async function processStatusMessage(
+  client,
+  phone,
+  message
+) {
+  return processStatus(
+    client,
+    phone,
+    message
+  );
+}
+
+/*
+|--------------------------------------------------------------------------
+| PUBLIC API
 |--------------------------------------------------------------------------
 */
 
@@ -638,7 +783,10 @@ module.exports = {
 
   processAutoView,
   processAutoLike,
+
   processStatus,
+  processStatusMessage,
+
   handleMessage,
 
   startStatusWorker,
