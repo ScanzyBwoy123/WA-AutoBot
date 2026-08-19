@@ -1,263 +1,215 @@
 'use strict';
-
 /**
- * StatusEngine
+ * Status Engine
  *
- * Responsible only for WhatsApp Status automation.
- *
- * Features:
+ * Responsible only for WhatsApp Status automation:
  * - Auto-view statuses
- * - Auto-react to statuses
- * - Start/stop automation
- * - Prevent duplicate listeners
+ * - Auto-like/react to statuses
  *
- * The engine does NOT manage:
- * - WhatsApp pairing
- * - accounts
- * - commands
- * - view-once media
+ * The WhatsApp client is supplied by MultiAccountWhatsAppService.
  */
-
 class StatusEngine {
   constructor() {
-    this.states = new Map();
-
-    console.log('[StatusEngine] Initialized');
+    this.workers = new Map();
   }
-
   normalizePhone(phone) {
     return String(phone || '').replace(/\D/g, '');
   }
-
-  getState(phone) {
-    const normalized = this.normalizePhone(phone);
-
-    return this.states.get(normalized) || null;
+  getWorker(phone) {
+    return this.workers.get(
+      this.normalizePhone(phone)
+    );
   }
-
   isRunning(phone) {
-    const state = this.getState(phone);
-
+    const worker = this.getWorker(phone);
     return Boolean(
-      state &&
-      state.running === true
+      worker &&
+      worker.running === true
     );
   }
-
-  async handleStatus(phone, message) {
-    const normalized =
-      this.normalizePhone(phone);
-
-    const state =
-      this.states.get(normalized);
-
-    if (!state || state.running !== true) {
-      return;
-    }
-
-    if (!message) {
-      return;
-    }
-
-    const isStatus =
-      message.isStatus === true ||
-      message.from === 'status@broadcast';
-
-    if (!isStatus) {
-      return;
-    }
-
-    console.log(
-      `[StatusEngine] Status detected for ${normalized}`
-    );
-
-    /*
-     * AUTO VIEW
-     */
-    if (state.autoView) {
-      try {
-        await state.client.sendSeen(
-          'status@broadcast'
-        );
-
-        console.log(
-          `[StatusEngine] Status viewed for ${normalized}`
-        );
-      } catch (error) {
-        console.error(
-          `[StatusEngine] Auto-view failed for ${normalized}:`,
-          error.message
-        );
-      }
-    }
-
-    /*
-     * AUTO REACTION
-     */
-    if (state.autoLike) {
-      try {
-        const emoji =
-          state.emoji || '❤️';
-
-        if (
-          typeof message.react === 'function'
-        ) {
-          await message.react(emoji);
-
-          console.log(
-            `[StatusEngine] Status reacted for ${normalized}: ${emoji}`
-          );
-        }
-      } catch (error) {
-        console.error(
-          `[StatusEngine] Auto-reaction failed for ${normalized}:`,
-          error.message
-        );
-      }
-    }
-  }
-
   start(phone, client, options = {}) {
     const normalized =
       this.normalizePhone(phone);
-
     if (!normalized) {
-      return {
-        success: false,
-        message: 'Phone number is required.'
-      };
+      throw new Error(
+        'WhatsApp account number is required.'
+      );
     }
-
     if (!client) {
-      return {
-        success: false,
-        message: 'WhatsApp client is unavailable.'
-      };
+      throw new Error(
+        'WhatsApp client is not available.'
+      );
     }
-
     /*
-     * Always remove an existing worker first.
+     * Never create duplicate workers.
      */
     this.stop(normalized);
-
-    const autoView =
-      options.autoView === true;
-
-    const autoLike =
-      options.autoLike === true;
-
-    const emoji =
-      options.emoji || '❤️';
-
-    if (!autoView && !autoLike) {
-      return {
-        success: false,
-        message: 'No status automation is enabled.'
-      };
-    }
-
-    const messageHandler =
-      async (message) => {
-        await this.handleStatus(
-          normalized,
-          message
+    const worker = {
+      phone: normalized,
+      client,
+      running: true,
+      autoView:
+        options.autoView === true,
+      autoLike:
+        options.autoLike === true,
+      emoji:
+        options.emoji || '❤️',
+      messageHandler: null
+    };
+    const messageHandler = async (message) => {
+      try {
+        if (!worker.running) {
+          return;
+        }
+        if (!message) {
+          return;
+        }
+        const isStatus =
+          message.isStatus === true ||
+          message.from === 'status@broadcast' ||
+          message.to === 'status@broadcast';
+        if (!isStatus) {
+          return;
+        }
+        console.log(
+          `[StatusEngine] Status detected for ${normalized}`
         );
-      };
-
+        /*
+         * VIEW
+         */
+        if (worker.autoView) {
+          try {
+            if (
+              typeof client.sendSeen === 'function'
+            ) {
+              await client.sendSeen(
+                'status@broadcast'
+              );
+              console.log(
+                `[StatusEngine] Status viewed for ${normalized}`
+              );
+            }
+          } catch (error) {
+            console.error(
+              `[StatusEngine] View failed for ${normalized}:`,
+              error.message
+            );
+          }
+        }
+        /*
+         * LIKE / REACT
+         */
+        if (worker.autoLike) {
+          try {
+            if (
+              typeof message.react === 'function'
+            ) {
+              await message.react(
+                worker.emoji
+              );
+              console.log(
+                `[StatusEngine] Status reacted with ${worker.emoji} for ${normalized}`
+              );
+            }
+          } catch (error) {
+            console.error(
+              `[StatusEngine] Reaction failed for ${normalized}:`,
+              error.message
+            );
+          }
+        }
+      } catch (error) {
+        console.error(
+          `[StatusEngine] Worker error for ${normalized}:`,
+          error.message
+        );
+      }
+    };
+    worker.messageHandler =
+      messageHandler;
     client.on(
       'message',
       messageHandler
     );
-
-    this.states.set(
+    this.workers.set(
       normalized,
-      {
-        running: true,
-        autoView,
-        autoLike,
-        emoji,
-        client,
-        messageHandler,
-        startedAt: Date.now()
-      }
+      worker
     );
-
     console.log(
       `[StatusEngine] Worker started for ${normalized}`
     );
-
-    return {
-      success: true,
-      running: true,
-      autoView,
-      autoLike,
-      emoji
-    };
+    return true;
   }
-
   stop(phone) {
     const normalized =
       this.normalizePhone(phone);
-
-    const state =
-      this.states.get(normalized);
-
-    if (state) {
-      try {
-        if (
-          state.client &&
-          state.messageHandler
-        ) {
-          state.client.removeListener(
-            'message',
-            state.messageHandler
-          );
-        }
-      } catch (error) {
-        console.error(
-          `[StatusEngine] Listener removal failed for ${normalized}:`,
-          error.message
+    const worker =
+      this.workers.get(normalized);
+    if (!worker) {
+      return true;
+    }
+    worker.running = false;
+    try {
+      if (
+        worker.client &&
+        worker.messageHandler
+      ) {
+        worker.client.removeListener(
+          'message',
+          worker.messageHandler
         );
       }
+    } catch (error) {
+      console.error(
+        `[StatusEngine] Listener removal failed for ${normalized}:`,
+        error.message
+      );
     }
-
-    this.states.delete(normalized);
-
+    this.workers.delete(
+      normalized
+    );
     console.log(
       `[StatusEngine] Worker stopped for ${normalized}`
     );
-
     return true;
   }
-
-  status(phone) {
-    const normalized =
-      this.normalizePhone(phone);
-
-    const state =
-      this.states.get(normalized);
-
+  restart(phone, client, options = {}) {
+    this.stop(phone);
+    return this.start(
+      phone,
+      client,
+      options
+    );
+  }
+  getStatus(phone) {
+    const worker =
+      this.getWorker(phone);
+    if (!worker) {
+      return {
+        running: false,
+        autoView: false,
+        autoLike: false,
+        emoji: '❤️'
+      };
+    }
     return {
       running:
-        state?.running === true,
-
+        worker.running === true,
       autoView:
-        state?.autoView === true,
-
+        worker.autoView === true,
       autoLike:
-        state?.autoLike === true,
-
+        worker.autoLike === true,
       emoji:
-        state?.emoji || '❤️'
+        worker.emoji || '❤️'
     };
   }
-
   stopAll() {
-    for (const phone of this.states.keys()) {
+    for (
+      const phone of this.workers.keys()
+    ) {
       this.stop(phone);
     }
   }
 }
-
 module.exports =
   new StatusEngine();
