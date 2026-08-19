@@ -26,28 +26,35 @@ async function restoreWhatsAppAccounts() {
     const accounts =
       multiAccountService.getAllAccounts();
 
-    if (!Array.isArray(accounts) || accounts.length === 0) {
+    if (
+      !Array.isArray(accounts) ||
+      accounts.length === 0
+    ) {
       console.log(
         '[Startup] No saved WhatsApp accounts found.'
       );
-      return;
+
+      return {
+        started: 0,
+        skipped: 0
+      };
     }
 
     let started = 0;
     let skipped = 0;
 
     for (const account of accounts) {
+      const phone =
+        multiAccountService.normalizeNumber(
+          account.phone
+        );
+
+      if (!phone) {
+        skipped++;
+        continue;
+      }
+
       try {
-        const phone =
-          multiAccountService.normalizeNumber(
-            account.phone
-          );
-
-        if (!phone) {
-          skipped++;
-          continue;
-        }
-
         /*
          * Check trial/subscription access
          * before starting WhatsApp.
@@ -70,16 +77,29 @@ async function restoreWhatsAppAccounts() {
           `[Startup] Starting WhatsApp account: ${phone}`
         );
 
+        /*
+         * IMPORTANT:
+         * Do not allow one broken account
+         * to stop the entire server.
+         */
         await multiAccountWhatsApp.startAccount(
           phone
         );
 
         started++;
 
+        console.log(
+          `[Startup] WhatsApp account started: ${phone}`
+        );
+
       } catch (error) {
+        skipped++;
+
         console.error(
-          `[Startup] Failed restoring account ${account.phone}:`,
-          error.message
+          `[Startup] Failed restoring account ${phone}:`,
+          error?.stack ||
+          error?.message ||
+          error
         );
       }
     }
@@ -88,32 +108,81 @@ async function restoreWhatsAppAccounts() {
       `[Startup] Account restoration complete. Started: ${started}, Skipped: ${skipped}`
     );
 
+    return {
+      started,
+      skipped
+    };
+
   } catch (error) {
     console.error(
       '[Startup] Account restoration failed:',
+      error?.stack ||
+      error?.message ||
       error
     );
+
+    /*
+     * Do NOT throw here.
+     *
+     * The HTTP server must remain alive even
+     * if WhatsApp restoration fails.
+     */
+    return {
+      started: 0,
+      skipped: 0,
+      error: error?.message || 'Unknown error'
+    };
   }
 }
 
 
 /*
 |--------------------------------------------------------------------------
-| STARTUP
+| START WHATSAPP RESTORATION
 |--------------------------------------------------------------------------
 |
 | IMPORTANT:
-| Call restoreWhatsAppAccounts() AFTER your
-| Express server has been created/configured.
+| This runs in the background.
 |
+| It must NEVER prevent the HTTP server
+| from staying alive.
 |--------------------------------------------------------------------------
 */
 
-restoreWhatsAppAccounts().catch(
-  error => {
-    console.error(
-      '[Startup] WhatsApp restoration error:',
-      error
-    );
-  }
-);
+function startWhatsAppRestoration() {
+  setImmediate(() => {
+    restoreWhatsAppAccounts()
+      .then(result => {
+        console.log(
+          '[Startup] WhatsApp restoration finished:',
+          result
+        );
+      })
+      .catch(error => {
+        /*
+         * Final safety net.
+         *
+         * Never allow WhatsApp startup errors
+         * to terminate Node.js.
+         */
+        console.error(
+          '[Startup] WhatsApp restoration crashed:',
+          error?.stack ||
+          error?.message ||
+          error
+        );
+      });
+  });
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| PUBLIC EXPORT
+|--------------------------------------------------------------------------
+*/
+
+module.exports = {
+  restoreWhatsAppAccounts,
+  startWhatsAppRestoration
+};
