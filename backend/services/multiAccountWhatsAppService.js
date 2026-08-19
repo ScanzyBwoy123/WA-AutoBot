@@ -119,8 +119,7 @@ class MultiAccountWhatsAppService {
     /*
      * Render/Puppeteer fallback.
      *
-     * If Puppeteer downloaded Chrome into its cache,
-     * search recursively.
+     * Search the Puppeteer cache for the Chrome executable.
      */
     const roots = [
       process.env.PUPPETEER_CACHE_DIR,
@@ -321,13 +320,6 @@ class MultiAccountWhatsAppService {
         `📥 AUTHORIZED COMMAND from ${phone}: ${body}`
       );
 
-      /*
-       * IMPORTANT:
-       *
-       * Your command system expects:
-       *
-       * execute(input, context)
-       */
       const response =
         await router.execute(
           body,
@@ -367,9 +359,6 @@ class MultiAccountWhatsAppService {
    * ============================================================
    * MESSAGE CACHE
    * ============================================================
-   *
-   * Anti-delete depends on seeing the original message BEFORE
-   * WhatsApp replaces it with a revoke message.
    */
 
   getMessageStore(phone) {
@@ -394,9 +383,6 @@ class MultiAccountWhatsAppService {
         return;
       }
 
-      /*
-       * Do not cache status messages as normal messages.
-       */
       if (
         message.from ===
           'status@broadcast' ||
@@ -419,12 +405,6 @@ class MultiAccountWhatsAppService {
 
       let media = null;
 
-      /*
-       * Save media immediately.
-       *
-       * This is important because after a message is deleted,
-       * WhatsApp may no longer make the media available.
-       */
       if (
         message.hasMedia === true
       ) {
@@ -460,9 +440,6 @@ class MultiAccountWhatsAppService {
           Date.now()
       });
 
-      /*
-       * Maximum cache size.
-       */
       while (store.size > 2000) {
         const oldest =
           store.keys().next().value;
@@ -498,25 +475,12 @@ class MultiAccountWhatsAppService {
           phone
         );
 
-      /*
-       * Only run if the account has anti-delete enabled.
-       */
       if (
         !account ||
         account.antiDelete !== true
       ) {
         return;
       }
-
-      /*
-       * whatsapp-web.js gives us:
-       *
-       * message       = revoked/current message
-       * revokedMessage = original message when available
-       *
-       * The official documentation notes that revokedMessage
-       * can be undefined, so we use our own cache as fallback.
-       */
 
       const store =
         this.getMessageStore(phone);
@@ -529,10 +493,6 @@ class MultiAccountWhatsAppService {
       let cached =
         id ? store.get(id) : null;
 
-      /*
-       * Prefer the original message supplied by
-       * whatsapp-web.js when available.
-       */
       if (revokedMessage) {
         cached = {
           id,
@@ -604,27 +564,32 @@ class MultiAccountWhatsAppService {
           '[Media / No text]'
         }`;
 
+      const client =
+        this.getClient(phone);
+
+      if (!client) {
+        return;
+      }
+
       if (
         cached.media
       ) {
-        await this.getClient(phone)
-          .sendMessage(
-            ownerJid,
-            cached.media,
-            {
-              caption: text,
-              mentions: [sender]
-            }
-          );
+        await client.sendMessage(
+          ownerJid,
+          cached.media,
+          {
+            caption: text,
+            mentions: [sender]
+          }
+        );
       } else {
-        await this.getClient(phone)
-          .sendMessage(
-            ownerJid,
-            text,
-            {
-              mentions: [sender]
-            }
-          );
+        await client.sendMessage(
+          ownerJid,
+          text,
+          {
+            mentions: [sender]
+          }
+        );
       }
 
       console.log(
@@ -670,9 +635,7 @@ class MultiAccountWhatsAppService {
     }
 
     return null;
-  }
-
-  /*
+  }  /*
    * ============================================================
    * VIEW ONCE
    * ============================================================
@@ -765,6 +728,13 @@ class MultiAccountWhatsAppService {
         return;
       }
 
+      const client =
+        this.getClient(phone);
+
+      if (!client) {
+        return;
+      }
+
       const sender =
         message.author ||
         message.from ||
@@ -778,17 +748,16 @@ class MultiAccountWhatsAppService {
         `📸 *VIEW-ONCE RECOVERED*\n\n` +
         `👤 *Sender:* @${senderNumber}`;
 
-      await this.getClient(phone)
-        .sendMessage(
-          ownerJid,
-          media,
-          {
-            caption,
-            mentions: sender
-              ? [sender]
-              : []
-          }
-        );
+      await client.sendMessage(
+        ownerJid,
+        media,
+        {
+          caption,
+          mentions: sender
+            ? [sender]
+            : []
+        }
+      );
 
       console.log(
         `✅ View-once media forwarded to owner for ${phone}`
@@ -832,13 +801,6 @@ class MultiAccountWhatsAppService {
    * ============================================================
    * STATUS AUTOMATION
    * ============================================================
-   *
-   * IMPORTANT:
-   *
-   * There is NO getBroadcasts() here.
-   *
-   * We process status messages received through the normal
-   * whatsapp-web.js event pipeline.
    */
 
   startStatusMonitor(phone) {
@@ -922,9 +884,6 @@ class MultiAccountWhatsAppService {
 
           /*
            * Auto-view.
-           *
-           * sendSeen('status@broadcast') is used instead of
-           * getBroadcasts().
            */
           if (
             current.autoView
@@ -1049,6 +1008,7 @@ class MultiAccountWhatsAppService {
 
     if (timer) {
       clearInterval(timer);
+
       this.statusTimers.delete(
         normalized
       );
@@ -1148,9 +1108,22 @@ class MultiAccountWhatsAppService {
               phone
             );
 
+          /*
+           * FIX:
+           *
+           * Do not check account.active directly.
+           * The account system determines whether the
+           * trial/subscription is currently active.
+           */
+          const accountStatus =
+            multiAccountService.checkAccount(
+              phone
+            );
+
           if (
             !account ||
-            account.active !== true
+            !accountStatus ||
+            accountStatus.active !== true
           ) {
             return;
           }
@@ -1200,16 +1173,6 @@ class MultiAccountWhatsAppService {
      * ----------------------------------------------------------
      * ANTI DELETE
      * ----------------------------------------------------------
-     *
-     * Official event:
-     *
-     * message_revoke_everyone
-     *
-     * Parameters:
-     *   message
-     *   revokedMessage
-     *
-     * The second parameter may contain the original message.
      */
 
     client.on(
@@ -1245,10 +1208,6 @@ class MultiAccountWhatsAppService {
      * ----------------------------------------------------------
      * PAIRING CODE
      * ----------------------------------------------------------
-     *
-     * whatsapp-web.js 1.34.7 emits "code".
-     *
-     * NOT "pairing-code".
      */
 
     client.on(
@@ -1448,9 +1407,7 @@ class MultiAccountWhatsAppService {
         );
       }
     );
-  }
-
-  /*
+  }  /*
    * ============================================================
    * PAIRING
    * ============================================================
@@ -1498,19 +1455,18 @@ class MultiAccountWhatsAppService {
         );
 
         /*
-         * IMPORTANT:
-         *
-         * requestPairingCode() requires the WhatsApp Web
-         * page to be initialized.
-         *
-         * We intentionally wait for the page instead of
-         * immediately calling it after initialize().
+         * Wait for WhatsApp Web to initialize.
          */
         await this.waitForPairingReady(
           client,
           30000
         );
 
+        /*
+         * whatsapp-web.js pairing-code API.
+         *
+         * The phone number must contain digits only.
+         */
         const code =
           await client.requestPairingCode(
             normalized,
@@ -1574,6 +1530,12 @@ class MultiAccountWhatsAppService {
     );
   }
 
+  /*
+   * ============================================================
+   * WAIT FOR WHATSAPP WEB
+   * ============================================================
+   */
+
   async waitForPairingReady(
     client,
     timeoutMs = 30000
@@ -1587,38 +1549,41 @@ class MultiAccountWhatsAppService {
     ) {
       try {
         /*
-         * If the client already has a page,
-         * pairing can proceed.
+         * If Puppeteer has created the page,
+         * WhatsApp Web is being initialized.
          */
         if (
           client.pupPage &&
           !client.pupPage.isClosed()
         ) {
           /*
-           * Wait until WhatsApp Web has loaded enough
-           * for the pairing API to exist.
+           * Check that the page is still responsive.
            */
-          const ready =
-            await client.pupPage.evaluate(
-              () => {
-                return Boolean(
-                  window.AuthStore &&
-                  window.AuthStore.PairingCodeLinkUtils
-                );
-              }
-            ).catch(
-              () => false
-            );
+          const pageReady =
+            await client.pupPage
+              .evaluate(
+                () => {
+                  return (
+                    document.readyState ===
+                      'interactive' ||
+                    document.readyState ===
+                      'complete'
+                  );
+                }
+              )
+              .catch(
+                () => false
+              );
 
-          if (ready) {
+          if (pageReady) {
             return true;
           }
         }
       } catch (_) {}
 
       /*
-       * If ready event has already fired, we're definitely
-       * initialized.
+       * If the client is already authenticated,
+       * pairing is no longer necessary.
        */
       if (
         client.info &&
@@ -1663,20 +1628,71 @@ class MultiAccountWhatsAppService {
       );
     }
 
+    /*
+     * Get the customer's account.
+     */
     const account =
       multiAccountService.getAccount(
         normalized
       );
 
-    if (
-      !account
-    ) {
+    if (!account) {
       throw new Error(
         'Account has not been registered.'
       );
     }
 
+    /*
+     * ----------------------------------------------------------
+     * SUBSCRIPTION / TRIAL CHECK
+     * ----------------------------------------------------------
+     *
+     * This is important because your logs showed:
+     *
+     * "Your trial or subscription is not active."
+     *
+     * We use the account service as the source of truth.
+     */
+
+    let accountStatus = null;
+
+    try {
+      if (
+        typeof multiAccountService.checkAccount ===
+        'function'
+      ) {
+        accountStatus =
+          multiAccountService.checkAccount(
+            normalized
+          );
+      }
+    } catch (error) {
+      console.error(
+        `[MultiAccountWhatsApp] Account check failed for ${normalized}:`,
+        error.message
+      );
+    }
+
+    /*
+     * If checkAccount() exists, use its result.
+     */
     if (
+      accountStatus &&
+      accountStatus.active !== true
+    ) {
+      throw new Error(
+        'Your trial or subscription is not active.'
+      );
+    }
+
+    /*
+     * Backward-compatible fallback.
+     *
+     * If the account service does not have checkAccount(),
+     * use account.active.
+     */
+    if (
+      !accountStatus &&
       account.active !== true
     ) {
       throw new Error(
@@ -1685,14 +1701,21 @@ class MultiAccountWhatsAppService {
     }
 
     /*
-     * Already connected.
+     * ----------------------------------------------------------
+     * ALREADY CONNECTED
+     * ----------------------------------------------------------
      */
+
     const existing =
-      this.getClient(normalized);
+      this.getClient(
+        normalized
+      );
 
     if (
       existing &&
-      this.isConnected(normalized)
+      this.isConnected(
+        normalized
+      )
     ) {
       return {
         success: true,
@@ -1704,8 +1727,11 @@ class MultiAccountWhatsAppService {
     }
 
     /*
-     * Already connecting.
+     * ----------------------------------------------------------
+     * ALREADY CONNECTING
+     * ----------------------------------------------------------
      */
+
     if (
       this.connecting.has(
         normalized
@@ -1738,12 +1764,20 @@ class MultiAccountWhatsAppService {
     );
 
     /*
-     * Destroy stale client if one exists.
+     * ----------------------------------------------------------
+     * DESTROY STALE CLIENT
+     * ----------------------------------------------------------
      */
+
     if (existing) {
       try {
         await existing.destroy();
-      } catch (_) {}
+      } catch (error) {
+        console.log(
+          `[MultiAccountWhatsApp] Could not destroy stale client for ${normalized}:`,
+          error.message
+        );
+      }
 
       this.clients.delete(
         normalized
@@ -1751,12 +1785,32 @@ class MultiAccountWhatsAppService {
     }
 
     try {
+      /*
+       * --------------------------------------------------------
+       * CHROME PATH
+       * --------------------------------------------------------
+       *
+       * Puppeteer Chrome is installed during npm postinstall.
+       *
+       * We first try to locate the executable.
+       */
+
       const chromePath =
         this.getChromePath();
 
       console.log(
         `🚀 Starting WhatsApp account ${normalized}`
       );
+
+      console.log(
+        `🌐 Chrome executable: ${chromePath}`
+      );
+
+      /*
+       * --------------------------------------------------------
+       * WHATSAPP CLIENT
+       * --------------------------------------------------------
+       */
 
       const client =
         new Client({
@@ -1766,6 +1820,7 @@ class MultiAccountWhatsAppService {
                 this.getSessionId(
                   normalized
                 ),
+
               dataPath:
                 this.sessionsDir
             }),
@@ -1808,13 +1863,16 @@ class MultiAccountWhatsAppService {
           takeoverTimeoutMs: 60000
         });
 
+      /*
+       * Store client BEFORE initialize().
+       */
       this.clients.set(
         normalized,
         client
       );
 
       /*
-       * Attach events BEFORE initialize().
+       * Attach ALL events BEFORE initialize().
        */
       this.setupEvents(
         normalized,
@@ -1822,27 +1880,36 @@ class MultiAccountWhatsAppService {
       );
 
       /*
-       * Start initialization.
+       * --------------------------------------------------------
+       * INITIALIZE
+       * --------------------------------------------------------
        */
+
       console.log(
         `🌐 Initializing WhatsApp Web for ${normalized}...`
       );
 
       await client.initialize();
 
+      console.log(
+        `✅ WhatsApp Web initialization started for ${normalized}`
+      );
+
       /*
-       * IMPORTANT PAIRING FIX:
+       * --------------------------------------------------------
+       * PAIRING CODE
+       * --------------------------------------------------------
        *
-       * Do NOT check client.info here.
+       * Do not immediately assume that initialization
+       * means pairing is ready.
        *
-       * client.info is not the correct way to determine
-       * whether pairing is required.
-       *
-       * Request the pairing code after initialize() and
-       * after the pairing API becomes available.
+       * Wait for the pairing API first.
        */
+
       if (
-        !this.isConnected(normalized)
+        !this.isConnected(
+          normalized
+        )
       ) {
         try {
           await this.requestPairingCode(
@@ -1863,27 +1930,35 @@ class MultiAccountWhatsAppService {
           /*
            * Do NOT immediately destroy the client.
            *
-           * WhatsApp Web may still be loading and the
-           * pairing code event can arrive shortly afterwards.
+           * WhatsApp Web may still finish loading and
+           * emit the "code" event.
            */
         }
       }
 
+      /*
+       * Get the latest pairing code.
+       */
+      const pairing =
+        this.getPairingCode(
+          normalized
+        );
+
       return {
         success: true,
+
         connected:
           this.isConnected(
             normalized
           ),
+
         connecting: true,
+
         pairingCode:
-          this.getPairingCode(
-            normalized
-          ).pairingCode,
+          pairing.pairingCode,
+
         message:
-          this.getPairingCode(
-            normalized
-          ).pairingCode
+          pairing.pairingCode
             ? 'Pairing code generated. Enter it in WhatsApp.'
             : 'WhatsApp initialization started. Waiting for pairing code.'
       };
@@ -1899,7 +1974,8 @@ class MultiAccountWhatsAppService {
 
       this.errors.set(
         normalized,
-        error.message
+        error.message ||
+          'Unable to start WhatsApp.'
       );
 
       try {
@@ -1909,6 +1985,9 @@ class MultiAccountWhatsAppService {
         );
       } catch (_) {}
 
+      /*
+       * Clean up failed client.
+       */
       const client =
         this.clients.get(
           normalized
@@ -1917,7 +1996,12 @@ class MultiAccountWhatsAppService {
       if (client) {
         try {
           await client.destroy();
-        } catch (_) {}
+        } catch (destroyError) {
+          console.error(
+            `[MultiAccountWhatsApp] Cleanup failed for ${normalized}:`,
+            destroyError.message
+          );
+        }
       }
 
       this.clients.delete(
@@ -1961,11 +2045,6 @@ class MultiAccountWhatsAppService {
   getStatus(phone) {
     const normalized =
       this.normalizeNumber(phone);
-
-    const client =
-      this.getClient(
-        normalized
-      );
 
     const pairing =
       this.getPairingCode(
@@ -2038,10 +2117,16 @@ class MultiAccountWhatsAppService {
     const normalized =
       this.normalizeNumber(phone);
 
+    /*
+     * Stop status automation first.
+     */
     this.stopStatusMonitor(
       normalized
     );
 
+    /*
+     * Cancel pending retry timer.
+     */
     const retryTimer =
       this.retryTimers.get(
         normalized
@@ -2106,6 +2191,7 @@ class MultiAccountWhatsAppService {
 
     return {
       success: true,
+
       message:
         'WhatsApp account disconnected.'
     };
@@ -2123,12 +2209,21 @@ class MultiAccountWhatsAppService {
     )
       .filter(
         ([phone]) =>
-          this.isConnected(phone)
+          this.isConnected(
+            phone
+          )
       )
       .map(
-        ([phone]) => phone
+        ([phone]) =>
+          phone
       );
   }
+
+  /*
+   * ============================================================
+   * STATISTICS
+   * ============================================================
+   */
 
   getStats() {
     return {
