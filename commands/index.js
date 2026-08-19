@@ -1,3 +1,5 @@
+'use strict';
+
 const fs = require('fs');
 const path = require('path');
 
@@ -21,11 +23,15 @@ function normalizeCommandName(name) {
 |--------------------------------------------------------------------------
 | LOAD COMMAND FILES
 |--------------------------------------------------------------------------
+|
+| IMPORTANT:
+| Do NOT clear the commands map here.
+|
+| Built-in commands are registered below and must remain available.
+|--------------------------------------------------------------------------
 */
 
 function loadCommands() {
-  commands.clear();
-
   let files = [];
 
   try {
@@ -35,6 +41,7 @@ function loadCommands() {
       '[Commands] Failed to read commands directory:',
       error.message
     );
+
     return;
   }
 
@@ -75,6 +82,18 @@ function loadCommands() {
         continue;
       }
 
+      /*
+       * Do not allow external command files
+       * to silently replace built-in commands.
+       */
+      if (commands.has(name)) {
+        console.log(
+          `ℹ️ Command already registered: .${name} — keeping existing command.`
+        );
+
+        continue;
+      }
+
       commands.set(
         name,
         commandModule
@@ -83,6 +102,7 @@ function loadCommands() {
       console.log(
         `✅ Command loaded: .${name}`
       );
+
     } catch (error) {
       console.error(
         `❌ Failed loading command ${file}:`,
@@ -165,7 +185,7 @@ async function menuCommand() {
   const names =
     getCommandNames()
       .filter(
-        (name) =>
+        name =>
           name !== 'menu'
       );
 
@@ -231,9 +251,7 @@ async function pingCommand() {
 |--------------------------------------------------------------------------
 */
 
-async function statusCommand(
-  context
-) {
+async function statusCommand(context) {
   try {
     const phone =
       context?.phone || '';
@@ -298,9 +316,11 @@ async function statusCommand(
       `Reaction: ${
         result.reaction ||
         result.autoLikeReaction ||
+        result.reactionEmoji ||
         '❤️'
       }`
     );
+
   } catch (error) {
     return (
       `❌ Status error: ${
@@ -326,9 +346,7 @@ async function autoViewCommand(
       args?.[0] || ''
     ).toLowerCase();
 
-  if (
-    action === 'status'
-  ) {
+  if (action === 'status') {
     const result =
       await callService(
         context,
@@ -415,6 +433,7 @@ async function autoViewCommand(
     return enabled
       ? '✅ Auto View enabled. The Status monitor is now active.'
       : '🛑 Auto View disabled.';
+
   } catch (error) {
     return (
       `❌ Auto View error: ${
@@ -440,9 +459,7 @@ async function autoLikeCommand(
       args?.[0] || ''
     ).toLowerCase();
 
-  if (
-    action === 'status'
-  ) {
+  if (action === 'status') {
     const result =
       await callService(
         context,
@@ -525,6 +542,7 @@ async function autoLikeCommand(
     return enabled
       ? '❤️ Auto Like enabled. New eligible Status messages will be reacted to.'
       : '🛑 Auto Like disabled.';
+
   } catch (error) {
     return (
       `❌ Auto Like error: ${
@@ -565,6 +583,7 @@ async function reactionCommand(
       `❤️ Current reaction: ${
         result?.reaction ||
         result?.autoLikeReaction ||
+        result?.reactionEmoji ||
         '❤️'
       }\n\n` +
       'Change it with:\n' +
@@ -593,6 +612,7 @@ async function reactionCommand(
     return (
       `✅ Automatic Status reaction changed to ${reaction}`
     );
+
   } catch (error) {
     return (
       `❌ Reaction error: ${
@@ -647,6 +667,7 @@ async function reactCommand(
     return (
       `✅ Status reacted with ${reaction}`
     );
+
   } catch (error) {
     return (
       `❌ Status reaction failed: ${
@@ -688,6 +709,7 @@ async function viewStatusCommand(
     return (
       '👁️ Status processing started.'
     );
+
   } catch (error) {
     return (
       `❌ Status view failed: ${
@@ -735,9 +757,7 @@ async function pairCommand(
         [phone]
       );
 
-    if (
-      result?.pairingCode
-    ) {
+    if (result?.pairingCode) {
       return (
         '🔑 *WHATSAPP PAIRING CODE*\n\n' +
         `Phone: ${phone}\n` +
@@ -749,6 +769,7 @@ async function pairCommand(
       '⏳ WhatsApp pairing has been started.\n' +
       'Use *.paircode* to check for the pairing code.'
     );
+
   } catch (error) {
     return (
       `❌ Pairing failed: ${
@@ -792,6 +813,7 @@ async function pairCodeCommand(
     return (
       '⏳ No pairing code is currently available.'
     );
+
   } catch (error) {
     return (
       `❌ Pairing code error: ${
@@ -838,6 +860,7 @@ async function connectCommand(
       result?.message ||
       '🔄 WhatsApp connection started.'
     );
+
   } catch (error) {
     return (
       `❌ Connection failed: ${
@@ -872,6 +895,7 @@ async function disconnectCommand(
       result?.message ||
       '🔴 WhatsApp account disconnected.'
     );
+
   } catch (error) {
     return (
       `❌ Disconnect failed: ${
@@ -907,6 +931,7 @@ async function logoutCommand(
       result?.message ||
       '🔴 WhatsApp session logged out.'
     );
+
   } catch (error) {
     return (
       `❌ Logout failed: ${
@@ -967,6 +992,7 @@ async function settingsCommand(
     `Reaction: ${
       result?.reaction ||
       result?.autoLikeReaction ||
+      result?.reactionEmoji ||
       '❤️'
     }`
   );
@@ -1094,7 +1120,7 @@ async function restartCommand(
     );
 
     await new Promise(
-      (resolve) =>
+      resolve =>
         setTimeout(
           resolve,
           1000
@@ -1114,6 +1140,7 @@ async function restartCommand(
       result?.message ||
       '🔄 WhatsApp account restart initiated.'
     );
+
   } catch (error) {
     return (
       `❌ Restart failed: ${
@@ -1276,10 +1303,6 @@ async function execute(
     return null;
   }
 
-  /*
-   * IMPORTANT:
-   * Ordinary WhatsApp messages are ignored.
-   */
   if (!text.startsWith('.')) {
     return null;
   }
@@ -1375,6 +1398,7 @@ async function execute(
     return (
       `❌ Command .${commandName} is not configured correctly.`
     );
+
   } catch (error) {
     console.error(
       `[Commands] Error executing .${commandName}:`,
