@@ -1,176 +1,119 @@
-const express = require('express');
-const cors = require('cors');
-const path = require('path');
-
-require('dotenv').config();
-
-const apiRoutes = require('./routes/api');
-const pairRoutes = require('./routes/pair');
-const whatsappService =
-  require('./services/whatsappService');
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(cors());
-app.use(express.json());
-
 /*
- * ==========================================
- * HEALTH CHECK
- * ==========================================
- */
+|--------------------------------------------------------------------------
+| MULTI-ACCOUNT ARCHITECTURE
+|--------------------------------------------------------------------------
+*/
 
-app.get('/health', (req, res) => {
-  res.json({
-    success: true,
-    message:
-      'WA-AutoBot backend is running',
-    pairing: true
-  });
-});
+const multiAccountService =
+  require('./services/multiAccountService');
+
+const multiAccountWhatsApp =
+  require('./services/multiAccountWhatsAppService');
 
 
 /*
- * ==========================================
- * ONLINE CUSTOMER PAIRING PAGE
- * ==========================================
- *
- * Customers will eventually open:
- *
- * https://YOUR-RENDER-URL/pair
- *
- * The HTML file is stored in:
- *
- * frontend/pair.html
- */
+|--------------------------------------------------------------------------
+| RESTORE ACTIVE WHATSAPP ACCOUNTS
+|--------------------------------------------------------------------------
+*/
 
-app.get('/pair', (req, res) => {
-  res.sendFile(
-    path.join(
-      process.cwd(),
-      '..',
-      'frontend',
-      'pair.html'
-    ),
-    (error) => {
-      if (error) {
-        console.error(
-          '[Pair Page Error]',
-          error
-        );
+async function restoreWhatsAppAccounts() {
+  try {
+    console.log(
+      '[Startup] Restoring active WhatsApp accounts...'
+    );
+
+    const accounts =
+      multiAccountService.getAllAccounts();
+
+    if (!Array.isArray(accounts) || accounts.length === 0) {
+      console.log(
+        '[Startup] No saved WhatsApp accounts found.'
+      );
+      return;
+    }
+
+    let started = 0;
+    let skipped = 0;
+
+    for (const account of accounts) {
+      try {
+        const phone =
+          multiAccountService.normalizeNumber(
+            account.phone
+          );
+
+        if (!phone) {
+          skipped++;
+          continue;
+        }
 
         /*
-         * Fallback for deployments where the
-         * working directory is the project root.
+         * Check trial/subscription access
+         * before starting WhatsApp.
          */
-        res.sendFile(
-          path.join(
-            process.cwd(),
-            'frontend',
-            'pair.html'
-          ),
-          (fallbackError) => {
-            if (fallbackError) {
-              console.error(
-                '[Pair Page Fallback Error]',
-                fallbackError
-              );
+        const access =
+          multiAccountService.getAccountAccess(
+            phone
+          );
 
-              return res.status(404).send(
-                'Pairing page is not available yet.'
-              );
-            }
-          }
+        if (!access.allowed) {
+          console.log(
+            `[Startup] Skipping ${phone}: ${access.reason}`
+          );
+
+          skipped++;
+          continue;
+        }
+
+        console.log(
+          `[Startup] Starting WhatsApp account: ${phone}`
+        );
+
+        await multiAccountWhatsApp.startAccount(
+          phone
+        );
+
+        started++;
+
+      } catch (error) {
+        console.error(
+          `[Startup] Failed restoring account ${account.phone}:`,
+          error.message
         );
       }
     }
-  );
-});
 
+    console.log(
+      `[Startup] Account restoration complete. Started: ${started}, Skipped: ${skipped}`
+    );
 
-/*
- * ==========================================
- * EXISTING BOT API
- * ==========================================
- */
-
-app.use('/api', apiRoutes);
-
-
-/*
- * ==========================================
- * MULTI-ACCOUNT PAIRING API
- * ==========================================
- *
- * POST /api/pair/register
- *
- * GET /api/pair/pairing-code/:phone
- *
- * GET /api/pair/status/:phone
- *
- * POST /api/pair/disconnect
- */
-
-app.use(
-  '/api/pair',
-  pairRoutes
-);
-
-
-/*
- * ==========================================
- * ERROR HANDLER
- * ==========================================
- */
-
-app.use(
-  (err, req, res, next) => {
+  } catch (error) {
     console.error(
-      '[Server Error]',
-      err
+      '[Startup] Account restoration failed:',
+      error
     );
-
-    res.status(500).json({
-      success: false,
-      error:
-        'Internal Server Error'
-    });
   }
-);
+}
 
 
 /*
- * ==========================================
- * EXISTING OWNER WHATSAPP BOT
- * ==========================================
- *
- * This remains separate from the
- * multi-account customer system.
- */
+|--------------------------------------------------------------------------
+| STARTUP
+|--------------------------------------------------------------------------
+|
+| IMPORTANT:
+| Call restoreWhatsAppAccounts() AFTER your
+| Express server has been created/configured.
+|
+|--------------------------------------------------------------------------
+*/
 
-whatsappService.init();
-
-
-/*
- * ==========================================
- * START SERVER
- * ==========================================
- */
-
-app.listen(
-  PORT,
-  () => {
-    console.log(
-      `🟢 WA-AutoBot backend running on port ${PORT}`
-    );
-
-    console.log(
-      `🌐 Customer pairing page: /pair`
-    );
-
-    console.log(
-      `🔗 Multi-account API: /api/pair`
+restoreWhatsAppAccounts().catch(
+  error => {
+    console.error(
+      '[Startup] WhatsApp restoration error:',
+      error
     );
   }
 );
