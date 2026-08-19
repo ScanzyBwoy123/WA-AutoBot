@@ -33,7 +33,23 @@ const app = express();
 app.use(express.json({
   limit: '10mb'
 }));
+const path = require('path');
 
+const pairRouter =
+  require('./routes/pair');
+
+const frontendDir =
+  path.join(__dirname, '..', 'frontend');
+
+app.use(express.static(frontendDir));
+
+app.get('/pair', (req, res) => {
+  res.sendFile(
+    path.join(frontendDir, 'pair.html')
+  );
+});
+
+app.use('/api/pair', pairRouter);
 app.use(express.urlencoded({
   extended: true,
   limit: '10mb'
