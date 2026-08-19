@@ -1,5 +1,18 @@
 'use strict';
 const db = require('../backend/database/db');
+function normalizePhone(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+function getPhone(context = {}) {
+  return normalizePhone(
+    context.phone ||
+    context.account?.phone ||
+    context.message?.from ||
+    context.chatId ||
+    context.from ||
+    ''
+  );
+}
 module.exports = {
   name: 'autoview',
   category: 'Automation',
@@ -8,56 +21,36 @@ module.exports = {
     try {
       let action = 'on';
       if (Array.isArray(input)) {
-        action = String(input[0] || 'on').toLowerCase();
+        action = String(input[0] || 'on')
+          .trim()
+          .toLowerCase();
       } else {
         const text = String(input || '').trim();
         const parts = text.split(/\s+/);
-        action = String(parts[1] || 'on').toLowerCase();
+        action = String(parts[1] || 'on')
+          .trim()
+          .toLowerCase();
       }
-      const phone =
-        context.phone ||
-        context.account?.phone ||
-        String(context.from || '').replace(/\D/g, '');
+      const phone = getPhone(context);
       const service = context.service;
+      console.log(
+        `[AutoView] Command=${action} phone=${phone || 'UNKNOWN'}`
+      );
       if (!phone) {
         return '❌ Could not identify your WhatsApp account.';
       }
-      /*
-       * Use the customer's actual account settings.
-       */
-      let accountService;
-      try {
-        accountService = require('../backend/services/multiAccountService');
-      } catch (error) {
-        console.error(
-          '[AutoView] Failed loading account service:',
-          error.message
-        );
-        return '❌ Account service unavailable.';
+      if (!service) {
+        return '❌ WhatsApp service context is unavailable.';
       }
-      const account =
-        accountService.getAccount(phone);
-      if (!account) {
-        return '❌ WhatsApp account not found.';
-      }
-      /*
-       * ========================================================
-       * OFF
-       * ========================================================
-       */
+      // =========================
+      // TURN OFF
+      // =========================
       if (action === 'off') {
-        account.autoView = false;
-        account.autoViewStatus = false;
-        account.updatedAt =
-          new Date().toISOString();
-        accountService.saveAccounts();
         db.updateSettings({
           autoView: false
         });
         if (
-          service &&
-          typeof service.stopStatusMonitor ===
-            'function'
+          typeof service.stopStatusMonitor === 'function'
         ) {
           service.stopStatusMonitor(phone);
         }
@@ -66,41 +59,31 @@ module.exports = {
           '👀 Auto-viewing has been stopped immediately.'
         );
       }
-      /*
-       * ========================================================
-       * ON
-       * ========================================================
-       */
+      // =========================
+      // TURN ON
+      // =========================
       if (action === 'on') {
-        account.autoView = true;
-        account.autoViewStatus = true;
-        account.updatedAt =
-          new Date().toISOString();
-        accountService.saveAccounts();
         db.updateSettings({
           autoView: true
         });
         if (
-          service &&
-          typeof service.startStatusMonitor ===
-            'function'
+          typeof service.startStatusMonitor !== 'function'
         ) {
-          const started =
-            service.startStatusMonitor(phone);
-          if (started) {
-            return (
-              'Auto View enabled ✅\n' +
-              '👀 Auto-viewing is now active.'
-            );
-          }
           return (
-            'Auto View saved ✅\n' +
-            '⚠️ Worker could not start. Make sure WhatsApp is connected.'
+            '❌ Status automation service is unavailable.'
+          );
+        }
+        const started =
+          service.startStatusMonitor(phone);
+        if (started) {
+          return (
+            'Auto View enabled ✅\n' +
+            '👀 Auto-viewing is now active.'
           );
         }
         return (
-          'Auto View enabled ✅\n' +
-          '⚠️ Setting saved, but the status worker is unavailable.'
+          '⚠️ Auto View could not start.\n' +
+          'Make sure your WhatsApp account is connected and READY.'
         );
       }
       return '⚠️ Usage: .autoview on|off';
