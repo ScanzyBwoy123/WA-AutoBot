@@ -3,54 +3,68 @@ const db = require('../backend/database/db');
 function normalizePhone(value) {
   return String(value || '').replace(/\D/g, '');
 }
-function getPhone(context = {}) {
-  return normalizePhone(
-    context.phone ||
-    context.account?.phone ||
-    context.message?.from ||
-    context.chatId ||
-    context.from ||
-    ''
-  );
-}
 module.exports = {
   name: 'autoview',
   category: 'Automation',
   description: 'Enable or disable automatic WhatsApp Status viewing',
-  async execute(input, context = {}) {
+  /*
+   * IMPORTANT:
+   * commands/index.js calls:
+   *
+   * command.execute(context, args)
+   *
+   * Therefore the first argument is CONTEXT
+   * and the second argument is ARGS.
+   */
+  async execute(context = {}, args = []) {
     try {
-      let action = 'on';
-      if (Array.isArray(input)) {
-        action = String(input[0] || 'on')
-          .trim()
-          .toLowerCase();
-      } else {
-        const text = String(input || '').trim();
-        const parts = text.split(/\s+/);
-        action = String(parts[1] || 'on')
-          .trim()
-          .toLowerCase();
-      }
-      const phone = getPhone(context);
-      const service = context.service;
+      const action = String(
+        args?.[0] || 'on'
+      )
+        .trim()
+        .toLowerCase();
+      const phone = normalizePhone(
+        context?.phone ||
+        context?.account?.phone ||
+        context?.message?.from ||
+        context?.chatId ||
+        context?.from ||
+        ''
+      );
+      const service =
+        context?.service ||
+        context?.multiAccountWhatsApp ||
+        context?.whatsappService ||
+        context?.accountService;
       console.log(
-        `[AutoView] Command=${action} phone=${phone || 'UNKNOWN'}`
+        `[AutoView] action=${action} phone=${phone || 'UNKNOWN'}`
       );
       if (!phone) {
-        return '❌ Could not identify your WhatsApp account.';
+        return (
+          '❌ Could not identify your WhatsApp account.\n' +
+          '⚠️ The command context did not contain a phone number.'
+        );
       }
       if (!service) {
-        return '❌ WhatsApp service context is unavailable.';
+        return (
+          '❌ WhatsApp service context is unavailable.'
+        );
       }
-      // =========================
-      // TURN OFF
-      // =========================
-      if (action === 'off') {
+      /*
+       * ============================================================
+       * OFF
+       * ============================================================
+       */
+      if (
+        action === 'off' ||
+        action === 'disable'
+      ) {
         db.updateSettings({
           autoView: false
         });
         if (
-          typeof service.stopStatusMonitor === 'function'
+          typeof service.stopStatusMonitor ===
+          'function'
         ) {
           service.stopStatusMonitor(phone);
         }
@@ -59,15 +73,21 @@ module.exports = {
           '👀 Auto-viewing has been stopped immediately.'
         );
       }
-      // =========================
-      // TURN ON
-      // =========================
-      if (action === 'on') {
+      /*
+       * ============================================================
+       * ON
+       * ============================================================
+       */
+      if (
+        action === 'on' ||
+        action === 'enable'
+      ) {
         db.updateSettings({
           autoView: true
         });
         if (
-          typeof service.startStatusMonitor !== 'function'
+          typeof service.startStatusMonitor !==
+          'function'
         ) {
           return (
             '❌ Status automation service is unavailable.'
@@ -82,19 +102,48 @@ module.exports = {
           );
         }
         return (
-          '⚠️ Auto View could not start.\n' +
+          '⚠️ Auto View was saved, but the Status worker could not start.\n' +
           'Make sure your WhatsApp account is connected and READY.'
         );
       }
-      return '⚠️ Usage: .autoview on|off';
+      /*
+       * ============================================================
+       * STATUS
+       * ============================================================
+       */
+      if (action === 'status') {
+        let result = null;
+        if (
+          typeof service.getStatusAutomation ===
+          'function'
+        ) {
+          result =
+            service.getStatusAutomation(phone);
+        }
+        return (
+          '👀 Auto View: ' +
+          (
+            result?.running &&
+            result?.autoView
+              ? 'ON ✅'
+              : 'OFF ❌'
+          )
+        );
+      }
+      return (
+        '⚠️ Usage:\n' +
+        '.autoview on\n' +
+        '.autoview off\n' +
+        '.autoview status'
+      );
     } catch (error) {
       console.error(
-        '[AutoView] Error:',
+        '[AutoView] Command error:',
         error
       );
       return (
         '❌ Auto View error: ' +
-        (error.message || 'Unknown error')
+        (error?.message || 'Unknown error')
       );
     }
   }
