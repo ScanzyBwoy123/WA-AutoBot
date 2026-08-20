@@ -17,6 +17,7 @@ const statusEngine =
 const mediaEngine =
   require('./mediaEngine');
 
+
 class MultiAccountWhatsAppService {
   constructor() {
     /*
@@ -69,6 +70,7 @@ class MultiAccountWhatsAppService {
     );
   }
 
+
   /*
    * ============================================================
    * BASIC HELPERS
@@ -120,12 +122,10 @@ class MultiAccountWhatsAppService {
   sleep(ms) {
     return new Promise(
       resolve =>
-        setTimeout(
-          resolve,
-          ms
-        )
+        setTimeout(resolve, ms)
     );
   }
+
 
   /*
    * ============================================================
@@ -155,21 +155,21 @@ class MultiAccountWhatsAppService {
       } catch (_) {}
     }
 
-    /*
-     * Search common Puppeteer cache directories.
-     */
-
     const roots = [
       process.env.PUPPETEER_CACHE_DIR,
+
       path.join(
         process.cwd(),
         '.cache'
       ),
+
       path.join(
         process.cwd(),
         '.puppeteer'
       ),
+
       '/opt/render/.cache/puppeteer',
+
       '/opt/render/project/src/.puppeteer'
     ].filter(Boolean);
 
@@ -196,7 +196,10 @@ class MultiAccountWhatsAppService {
 
           if (
             entry.isFile() &&
-            entry.name === 'chrome'
+            (
+              entry.name === 'chrome' ||
+              entry.name === 'chrome-headless-shell'
+            )
           ) {
             try {
               fs.accessSync(
@@ -244,10 +247,16 @@ class MultiAccountWhatsAppService {
       }
     }
 
-    throw new Error(
-      'Chrome executable not found. Install Chromium/Chrome or set CHROME_BIN.'
+    /*
+     * Allow Puppeteer to find its own browser.
+     */
+    console.log(
+      '[MultiAccountWhatsApp] No system Chrome found. Using Puppeteer default.'
     );
+
+    return undefined;
   }
+
 
   /*
    * ============================================================
@@ -259,12 +268,12 @@ class MultiAccountWhatsAppService {
     const candidates = [
       path.resolve(
         __dirname,
-        '../../commands/index.js'
+        '../commands/index.js'
       ),
 
       path.resolve(
         __dirname,
-        '../commands/index.js'
+        '../../commands/index.js'
       ),
 
       path.resolve(
@@ -309,6 +318,7 @@ class MultiAccountWhatsAppService {
     return null;
   }
 
+
   async safeReply(
     message,
     text
@@ -334,6 +344,7 @@ class MultiAccountWhatsAppService {
 
     return false;
   }
+
 
   /*
    * ============================================================
@@ -366,6 +377,11 @@ class MultiAccountWhatsAppService {
           '[Commands] Command router not found.'
         );
 
+        await this.safeReply(
+          message,
+          '❌ Command system is unavailable.'
+        );
+
         return;
       }
 
@@ -374,30 +390,24 @@ class MultiAccountWhatsAppService {
 
       const context = {
         client,
+
         message,
+
         phone,
+
         from:
           message.from,
+
         chatId:
           message.from,
 
-        /*
-         * New architecture:
-         *
-         * service = WhatsApp connection layer
-         */
-        service: this,
+        service:
+          this,
 
-        /*
-         * Account/subscription layer
-         */
         multiAccountService,
 
-        /*
-         * Engines are available to commands
-         * when needed.
-         */
         statusEngine,
+
         mediaEngine
       };
 
@@ -441,6 +451,7 @@ class MultiAccountWhatsAppService {
     }
   }
 
+
   /*
    * ============================================================
    * MESSAGE CACHE
@@ -449,9 +460,7 @@ class MultiAccountWhatsAppService {
 
   getMessageStore(phone) {
     const normalized =
-      this.normalizeNumber(
-        phone
-      );
+      this.normalizeNumber(phone);
 
     if (
       !this.messageStores.has(
@@ -469,6 +478,7 @@ class MultiAccountWhatsAppService {
     );
   }
 
+
   async cacheMessage(
     phone,
     message
@@ -478,9 +488,6 @@ class MultiAccountWhatsAppService {
         return;
       }
 
-      /*
-       * Status messages belong to StatusEngine.
-       */
       if (
         message.from ===
           'status@broadcast' ||
@@ -506,7 +513,7 @@ class MultiAccountWhatsAppService {
       let media = null;
 
       /*
-       * Cache normal media for anti-delete.
+       * Cache media for anti-delete.
        */
       if (
         message.hasMedia === true
@@ -557,7 +564,7 @@ class MultiAccountWhatsAppService {
       );
 
       /*
-       * Keep cache under control.
+       * Keep cache below 2000 messages.
        */
       while (
         store.size > 2000
@@ -582,6 +589,7 @@ class MultiAccountWhatsAppService {
       );
     }
   }
+
 
   /*
    * ============================================================
@@ -622,7 +630,14 @@ class MultiAccountWhatsAppService {
           ? store.get(id)
           : null;
 
-      if (revokedMessage) {
+      /*
+       * whatsapp-web.js may provide the
+       * revoked message as the second argument.
+       */
+      if (
+        revokedMessage &&
+        !cached
+      ) {
         cached = {
           id,
 
@@ -678,6 +693,10 @@ class MultiAccountWhatsAppService {
         );
 
       if (!ownerJid) {
+        console.log(
+          `[AntiDelete] Owner JID unavailable for ${phone}`
+        );
+
         return;
       }
 
@@ -713,7 +732,12 @@ class MultiAccountWhatsAppService {
           cached.media,
           {
             caption: text,
-            mentions: [sender]
+
+            mentions:
+              sender &&
+              sender.includes('@')
+                ? [sender]
+                : []
           }
         );
       } else {
@@ -721,7 +745,11 @@ class MultiAccountWhatsAppService {
           ownerJid,
           text,
           {
-            mentions: [sender]
+            mentions:
+              sender &&
+              sender.includes('@')
+                ? [sender]
+                : []
           }
         );
       }
@@ -741,6 +769,7 @@ class MultiAccountWhatsAppService {
     }
   }
 
+
   /*
    * ============================================================
    * OWNER JID
@@ -749,9 +778,7 @@ class MultiAccountWhatsAppService {
 
   getOwnerJid(phone) {
     const normalized =
-      this.normalizeNumber(
-        phone
-      );
+      this.normalizeNumber(phone);
 
     const account =
       multiAccountService.getAccount(
@@ -781,6 +808,7 @@ class MultiAccountWhatsAppService {
     return null;
   }
 
+
   /*
    * ============================================================
    * STATUS CONFIGURATION
@@ -790,9 +818,7 @@ class MultiAccountWhatsAppService {
   getStatusConfig(phone) {
     const account =
       multiAccountService.getAccount(
-        this.normalizeNumber(
-          phone
-        )
+        this.normalizeNumber(phone)
       );
 
     return {
@@ -810,6 +836,7 @@ class MultiAccountWhatsAppService {
     };
   }
 
+
   /*
    * ============================================================
    * STATUS ENGINE
@@ -818,14 +845,10 @@ class MultiAccountWhatsAppService {
 
   startStatusMonitor(phone) {
     const normalized =
-      this.normalizeNumber(
-        phone
-      );
+      this.normalizeNumber(phone);
 
     const client =
-      this.getClient(
-        normalized
-      );
+      this.getClient(normalized);
 
     if (!client) {
       return false;
@@ -865,11 +888,10 @@ class MultiAccountWhatsAppService {
     }
   }
 
+
   stopStatusMonitor(phone) {
     const normalized =
-      this.normalizeNumber(
-        phone
-      );
+      this.normalizeNumber(phone);
 
     try {
       return statusEngine.stop(
@@ -885,11 +907,10 @@ class MultiAccountWhatsAppService {
     }
   }
 
+
   getStatusAutomation(phone) {
     const normalized =
-      this.normalizeNumber(
-        phone
-      );
+      this.normalizeNumber(phone);
 
     try {
       return statusEngine.getStatus(
@@ -904,6 +925,7 @@ class MultiAccountWhatsAppService {
       };
     }
   }
+
 
   /*
    * ============================================================
@@ -930,6 +952,7 @@ class MultiAccountWhatsAppService {
     }
   }
 
+
   unregisterMediaClient(phone) {
     try {
       return mediaEngine.unregisterClient(
@@ -945,6 +968,7 @@ class MultiAccountWhatsAppService {
     }
   }
 
+
   /*
    * ============================================================
    * EVENTS
@@ -955,20 +979,19 @@ class MultiAccountWhatsAppService {
     phone,
     client
   ) {
+
     /*
      * ----------------------------------------------------------
      * COMMANDS
      * ----------------------------------------------------------
+     *
+     * Commands from the linked account itself.
      */
 
     client.on(
       'message_create',
       async message => {
         try {
-          /*
-           * Commands only from the linked
-           * WhatsApp account itself.
-           */
           if (
             message?.fromMe !== true
           ) {
@@ -986,9 +1009,6 @@ class MultiAccountWhatsAppService {
             return;
           }
 
-          /*
-           * Never treat Status as commands.
-           */
           if (
             message.from ===
               'status@broadcast' ||
@@ -1029,9 +1049,10 @@ class MultiAccountWhatsAppService {
       }
     );
 
+
     /*
      * ----------------------------------------------------------
-     * NORMAL MESSAGES
+     * NORMAL MESSAGES / ANTI DELETE CACHE
      * ----------------------------------------------------------
      */
 
@@ -1039,9 +1060,6 @@ class MultiAccountWhatsAppService {
       'message',
       async message => {
         try {
-          /*
-           * StatusEngine owns Status.
-           */
           if (
             message?.from ===
               'status@broadcast' ||
@@ -1064,12 +1082,15 @@ class MultiAccountWhatsAppService {
       }
     );
 
+
     /*
      * ----------------------------------------------------------
      * VIEW-ONCE MEDIA
      * ----------------------------------------------------------
      *
-     * MediaEngine owns View Once handling.
+     * IMPORTANT:
+     * Only call MediaEngine when the message
+     * is actually detected as view-once.
      */
 
     client.on(
@@ -1086,16 +1107,22 @@ class MultiAccountWhatsAppService {
           }
 
           /*
-           * Only process if MediaEngine
-           * recognizes it as View Once.
+           * MediaEngine provides the authoritative
+           * view-once detector.
            */
           if (
-            typeof mediaEngine.isViewOnce ===
-              'function' &&
-            !mediaEngine.isViewOnce(
-              message
-            )
+            typeof mediaEngine.isViewOnce !==
+              'function'
           ) {
+            return;
+          }
+
+          const isViewOnce =
+            mediaEngine.isViewOnce(
+              message
+            );
+
+          if (!isViewOnce) {
             return;
           }
 
@@ -1122,6 +1149,7 @@ class MultiAccountWhatsAppService {
       }
     );
 
+
     /*
      * ----------------------------------------------------------
      * ANTI DELETE
@@ -1134,13 +1162,21 @@ class MultiAccountWhatsAppService {
         message,
         revokedMessage
       ) => {
-        await this.handleMessageRevoke(
-          phone,
-          message,
-          revokedMessage
-        );
+        try {
+          await this.handleMessageRevoke(
+            phone,
+            message,
+            revokedMessage
+          );
+        } catch (error) {
+          console.error(
+            `[AntiDelete] Event failed for ${phone}:`,
+            error.message
+          );
+        }
       }
     );
+
 
     /*
      * ----------------------------------------------------------
@@ -1156,6 +1192,7 @@ class MultiAccountWhatsAppService {
         );
       }
     );
+
 
     /*
      * ----------------------------------------------------------
@@ -1191,6 +1228,7 @@ class MultiAccountWhatsAppService {
       }
     );
 
+
     /*
      * ----------------------------------------------------------
      * AUTHENTICATED
@@ -1209,6 +1247,7 @@ class MultiAccountWhatsAppService {
         );
       }
     );
+
 
     /*
      * ----------------------------------------------------------
@@ -1247,7 +1286,7 @@ class MultiAccountWhatsAppService {
         } catch (_) {}
 
         /*
-         * Register client with MediaEngine.
+         * Register MediaEngine.
          */
         this.registerMediaClient(
           phone,
@@ -1262,6 +1301,7 @@ class MultiAccountWhatsAppService {
         );
       }
     );
+
 
     /*
      * ----------------------------------------------------------
@@ -1303,6 +1343,7 @@ class MultiAccountWhatsAppService {
       }
     );
 
+
     /*
      * ----------------------------------------------------------
      * DISCONNECTED
@@ -1337,9 +1378,6 @@ class MultiAccountWhatsAppService {
           phone
         );
 
-        /*
-         * Remove client from MediaEngine.
-         */
         this.unregisterMediaClient(
           phone
         );
@@ -1361,6 +1399,7 @@ class MultiAccountWhatsAppService {
       }
     );
 
+
     /*
      * ----------------------------------------------------------
      * STATE
@@ -1377,6 +1416,7 @@ class MultiAccountWhatsAppService {
     );
   }
 
+
   /*
    * ============================================================
    * PAIRING
@@ -1388,14 +1428,10 @@ class MultiAccountWhatsAppService {
     attempts = 3
   ) {
     const normalized =
-      this.normalizeNumber(
-        phone
-      );
+      this.normalizeNumber(phone);
 
     const client =
-      this.getClient(
-        normalized
-      );
+      this.getClient(normalized);
 
     if (!client) {
       throw new Error(
@@ -1404,9 +1440,7 @@ class MultiAccountWhatsAppService {
     }
 
     if (
-      this.isConnected(
-        normalized
-      )
+      this.isConnected(normalized)
     ) {
       return {
         success: true,
@@ -1495,6 +1529,7 @@ class MultiAccountWhatsAppService {
     );
   }
 
+
   /*
    * ============================================================
    * WAIT FOR WHATSAPP WEB
@@ -1553,6 +1588,7 @@ class MultiAccountWhatsAppService {
     );
   }
 
+
   /*
    * ============================================================
    * START ACCOUNT
@@ -1561,9 +1597,7 @@ class MultiAccountWhatsAppService {
 
   async startAccount(phone) {
     const normalized =
-      this.normalizeNumber(
-        phone
-      );
+      this.normalizeNumber(phone);
 
     if (!normalized) {
       throw new Error(
@@ -1596,20 +1630,17 @@ class MultiAccountWhatsAppService {
       );
     }
 
+
     /*
      * Already connected.
      */
 
     const existing =
-      this.getClient(
-        normalized
-      );
+      this.getClient(normalized);
 
     if (
       existing &&
-      this.isConnected(
-        normalized
-      )
+      this.isConnected(normalized)
     ) {
       return {
         success: true,
@@ -1620,14 +1651,13 @@ class MultiAccountWhatsAppService {
       };
     }
 
+
     /*
      * Already connecting.
      */
 
     if (
-      this.connecting.has(
-        normalized
-      )
+      this.connecting.has(normalized)
     ) {
       const current =
         this.getPairingCode(
@@ -1636,16 +1666,21 @@ class MultiAccountWhatsAppService {
 
       return {
         success: true,
+
         connecting: true,
+
         connected: false,
+
         pairingCode:
           current.pairingCode,
+
         message:
           current.pairingCode
             ? 'Pairing code is ready.'
             : 'WhatsApp is connecting. Please wait for the pairing code.'
       };
     }
+
 
     this.connecting.add(
       normalized
@@ -1654,6 +1689,7 @@ class MultiAccountWhatsAppService {
     this.errors.delete(
       normalized
     );
+
 
     /*
      * Destroy stale client.
@@ -1682,6 +1718,7 @@ class MultiAccountWhatsAppService {
       );
     }
 
+
     try {
       const chromePath =
         this.getChromePath();
@@ -1691,8 +1728,50 @@ class MultiAccountWhatsAppService {
       );
 
       console.log(
-        `🌐 Chrome executable: ${chromePath}`
+        `🌐 Chrome executable: ${
+          chromePath ||
+          'Puppeteer default'
+        }`
       );
+
+
+      const puppeteerConfig = {
+        headless: true,
+
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-extensions',
+          '--disable-background-networking',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-breakpad',
+          '--disable-component-extensions-with-background-pages',
+          '--disable-hang-monitor',
+          '--disable-ipc-flooding-protection',
+          '--disable-popup-blocking',
+          '--disable-renderer-backgrounding',
+          '--disable-sync',
+          '--metrics-recording-only',
+          '--mute-audio'
+        ],
+
+        timeout: 120000
+      };
+
+      /*
+       * Only set executablePath when a real
+       * executable was found.
+       */
+      if (chromePath) {
+        puppeteerConfig.executablePath =
+          chromePath;
+      }
+
 
       const client =
         new Client({
@@ -1707,36 +1786,8 @@ class MultiAccountWhatsAppService {
                 this.sessionsDir
             }),
 
-          puppeteer: {
-            executablePath:
-              chromePath,
-
-            headless: true,
-
-            args: [
-              '--no-sandbox',
-              '--disable-setuid-sandbox',
-              '--disable-dev-shm-usage',
-              '--disable-gpu',
-              '--no-first-run',
-              '--no-zygote',
-              '--disable-extensions',
-              '--disable-background-networking',
-              '--disable-background-timer-throttling',
-              '--disable-backgrounding-occluded-windows',
-              '--disable-breakpad',
-              '--disable-component-extensions-with-background-pages',
-              '--disable-hang-monitor',
-              '--disable-ipc-flooding-protection',
-              '--disable-popup-blocking',
-              '--disable-renderer-backgrounding',
-              '--disable-sync',
-              '--metrics-recording-only',
-              '--mute-audio'
-            ],
-
-            timeout: 120000
-          },
+          puppeteer:
+            puppeteerConfig,
 
           qrMaxRetries: 5,
 
@@ -1744,6 +1795,7 @@ class MultiAccountWhatsAppService {
 
           takeoverTimeoutMs: 60000
         });
+
 
       /*
        * Store before initialize.
@@ -1754,9 +1806,9 @@ class MultiAccountWhatsAppService {
         client
       );
 
+
       /*
-       * IMPORTANT:
-       * MediaEngine gets the client immediately.
+       * Register MediaEngine.
        */
 
       this.registerMediaClient(
@@ -1764,14 +1816,16 @@ class MultiAccountWhatsAppService {
         client
       );
 
+
       /*
-       * Attach all listeners before initialize.
+       * Attach listeners BEFORE initialize.
        */
 
       this.setupEvents(
         normalized,
         client
       );
+
 
       console.log(
         `🌐 Initializing WhatsApp Web for ${normalized}...`
@@ -1782,6 +1836,7 @@ class MultiAccountWhatsAppService {
       console.log(
         `✅ WhatsApp Web initialization started for ${normalized}`
       );
+
 
       /*
        * Generate pairing code.
@@ -1810,10 +1865,12 @@ class MultiAccountWhatsAppService {
         }
       }
 
+
       const pairing =
         this.getPairingCode(
           normalized
         );
+
 
       return {
         success: true,
@@ -1833,6 +1890,7 @@ class MultiAccountWhatsAppService {
             ? 'Pairing code generated. Enter it in WhatsApp.'
             : 'WhatsApp initialization started. Waiting for pairing code.'
       };
+
     } catch (error) {
       console.error(
         `[MultiAccountWhatsApp] Start failed for ${normalized}:`,
@@ -1888,6 +1946,7 @@ class MultiAccountWhatsAppService {
     }
   }
 
+
   /*
    * ============================================================
    * PAIRING CODE
@@ -1896,9 +1955,7 @@ class MultiAccountWhatsAppService {
 
   getPairingCode(phone) {
     const normalized =
-      this.normalizeNumber(
-        phone
-      );
+      this.normalizeNumber(phone);
 
     const code =
       this.pairingCodes.get(
@@ -1914,6 +1971,7 @@ class MultiAccountWhatsAppService {
     };
   }
 
+
   /*
    * ============================================================
    * STATUS
@@ -1922,9 +1980,7 @@ class MultiAccountWhatsAppService {
 
   getStatus(phone) {
     const normalized =
-      this.normalizeNumber(
-        phone
-      );
+      this.normalizeNumber(phone);
 
     const pairing =
       this.getPairingCode(
@@ -1955,12 +2011,10 @@ class MultiAccountWhatsAppService {
 
     return {
       connected:
-        status ===
-        'Connected',
+        status === 'Connected',
 
       connecting:
-        status ===
-        'Connecting',
+        status === 'Connecting',
 
       status,
 
@@ -1989,19 +2043,16 @@ class MultiAccountWhatsAppService {
     };
   }
 
+
   /*
    * ============================================================
    * DISCONNECT
    * ============================================================
    */
 
-  async disconnectAccount(
-    phone
-  ) {
+  async disconnectAccount(phone) {
     const normalized =
-      this.normalizeNumber(
-        phone
-      );
+      this.normalizeNumber(phone);
 
     this.stopStatusMonitor(
       normalized
@@ -2081,6 +2132,7 @@ class MultiAccountWhatsAppService {
     };
   }
 
+
   /*
    * ============================================================
    * CONNECTED ACCOUNTS
@@ -2093,15 +2145,14 @@ class MultiAccountWhatsAppService {
     )
       .filter(
         ([phone]) =>
-          this.isConnected(
-            phone
-          )
+          this.isConnected(phone)
       )
       .map(
         ([phone]) =>
           phone
       );
   }
+
 
   /*
    * ============================================================
@@ -2144,6 +2195,7 @@ class MultiAccountWhatsAppService {
     };
   }
 
+
   /*
    * ============================================================
    * ENGINE ACCESS
@@ -2158,6 +2210,7 @@ class MultiAccountWhatsAppService {
     return mediaEngine;
   }
 }
+
 
 module.exports =
   new MultiAccountWhatsAppService();
