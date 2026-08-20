@@ -257,23 +257,16 @@ async function statusCommand(context) {
       context?.phone || '';
 
     const result =
-      await callService(
-        context,
-        [
-          'getStatus',
-          'getAccountStatus'
-        ],
-        [phone]
-      );
-
-    if (!result) {
-      return (
-        '📊 *ACCOUNT STATUS*\n\n' +
-        `Phone: ${phone}\n` +
-        'Connection: Unknown\n' +
-        'Auto View: Unknown\n' +
-        'Auto Like: Unknown'
-      );
+  await callService(
+    context,
+    [
+      'setAutoView',
+      'setAutoViewStatus',
+      'setAutoViewEnabled',
+      'enableAutoView'
+    ],
+    [true]
+  );
     }
 
     return (
