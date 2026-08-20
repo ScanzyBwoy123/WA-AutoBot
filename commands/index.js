@@ -404,10 +404,11 @@ async function autoViewCommand(
         await callService(
           context,
           [
-            'setAutoView',
-            'setAutoViewEnabled',
-            'enableAutoView'
-          ],
+  'setAutoView',
+  'setAutoViewStatus',
+  'setAutoViewEnabled',
+  'enableAutoView'
+]
           [true]
         );
     } else {
