@@ -1113,6 +1113,38 @@ class MultiAccountService {
     };
   }
 }
+  setAutoViewStatus(phone, enabled) {
+    const normalized = this.normalizeNumber(phone);
 
+    const account = this.getAccount(normalized);
+
+    if (!account) {
+      console.error(
+        `[MultiAccountService] Account not found: ${normalized}`
+      );
+      return false;
+    }
+
+    if (!this.isAccountActive(normalized)) {
+      console.error(
+        `[MultiAccountService] Account is not active: ${normalized}`
+      );
+      return false;
+    }
+
+    account.autoViewStatus = Boolean(enabled);
+
+    account.updatedAt = new Date().toISOString();
+
+    this.saveAccounts();
+
+    console.log(
+      `[MultiAccountService] Auto View ${
+        account.autoViewStatus ? 'ENABLED' : 'DISABLED'
+      } for ${normalized}`
+    );
+
+    return true;
+  }
 module.exports =
   new MultiAccountService();
