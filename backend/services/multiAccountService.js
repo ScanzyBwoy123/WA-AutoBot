@@ -1111,8 +1111,7 @@ class MultiAccountService {
             a.connected
         ).length
     };
-  }
-}
+  
     }
 
   setAutoViewStatus(phone, enabled) {
