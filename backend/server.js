@@ -226,18 +226,66 @@ app.post('/api/accounts/:phone/start', async (req, res) => {
       });
     }
 
-    const access =
-      multiAccountService.getAccountAccess(
-        phone
-      );
+    /*
+ * --------------------------------------------------
+ * CREATE ACCOUNT AUTOMATICALLY
+ * --------------------------------------------------
+ *
+ * Fixes:
+ * "Account not found"
+ *
+ * A new phone number automatically receives
+ * a 48-hour trial account.
+ *
+ * Existing accounts are NOT recreated.
+ */
 
-    if (!access.allowed) {
-      return res.status(403).json({
-        success: false,
-        error: access.message,
-        reason: access.reason
-      });
-    }
+let account =
+  multiAccountService.getAccount(
+    phone
+  );
+
+if (!account) {
+  const created =
+    multiAccountService.createAccount(
+      phone
+    );
+
+  if (!created.success) {
+    return res.status(400).json({
+      success: false,
+      error:
+        created.message ||
+        'Unable to create account'
+    });
+  }
+
+  account =
+    created.account;
+
+  console.log(
+    `[API] New account created for ${phone}`
+  );
+}
+
+/*
+ * --------------------------------------------------
+ * CHECK TRIAL / SUBSCRIPTION
+ * --------------------------------------------------
+ */
+
+const access =
+  multiAccountService.getAccountAccess(
+    phone
+  );
+
+if (!access.allowed) {
+  return res.status(403).json({
+    success: false,
+    error: access.message,
+    reason: access.reason
+  });
+}
 
     const result =
       await multiAccountWhatsApp.startAccount(
