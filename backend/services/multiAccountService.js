@@ -1157,7 +1157,4 @@ class MultiAccountService {
   }
 }
 
-module.exports =
-  new MultiAccountService();
-module.exports =
-  new MultiAccountService();
+module.exports = new MultiAccountService();
