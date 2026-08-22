@@ -393,7 +393,7 @@ async function autoViewCommand(
             'setAutoViewEnabled',
             'enableAutoView'
           ],
-          [true]
+          [context?.phone, true]  // ✅ FIXED: Pass phone + enabled
         );
     } else {
       result =
@@ -405,7 +405,7 @@ async function autoViewCommand(
             'setAutoViewEnabled',
             'disableAutoView'
           ],
-          [false]
+          [context?.phone, false]  // ✅ FIXED: Pass phone + enabled
         );
     }
 
@@ -513,7 +513,7 @@ async function autoLikeCommand(
             'setAutoLikeEnabled',
             'enableAutoLike'
           ],
-          [true]
+          [context?.phone, true]  // ✅ FIXED: Pass phone + enabled
         );
     } else {
       result =
@@ -524,7 +524,7 @@ async function autoLikeCommand(
             'setAutoLikeEnabled',
             'disableAutoLike'
           ],
-          [false]
+          [context?.phone, false]  // ✅ FIXED: Pass phone + enabled
         );
     }
 
@@ -606,7 +606,7 @@ async function reactionCommand(
           'setAutoLikeReaction',
           'setStatusReaction'
         ],
-        [reaction]
+        [context?.phone, reaction]  // ✅ FIXED: Pass phone + reaction
       );
 
     if (result === undefined) {
@@ -655,7 +655,7 @@ async function reactCommand(
           'reactStatus',
           'likeStatus'
         ],
-        [reaction]
+        [context?.phone, reaction]  // ✅ FIXED: Pass phone + reaction
       );
 
     if (result === undefined) {
@@ -703,7 +703,7 @@ async function viewStatusCommand(
           'openStatuses',
           'processStatuses'
         ],
-        [context?.phone]
+        [context?.phone]  // ✅ FIXED: Pass phone
       );
 
     if (result === undefined) {
