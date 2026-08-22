@@ -23,12 +23,6 @@ function normalizeCommandName(name) {
 |--------------------------------------------------------------------------
 | LOAD COMMAND FILES
 |--------------------------------------------------------------------------
-|
-| IMPORTANT:
-| Do NOT clear the commands map here.
-|
-| Built-in commands are registered below and must remain available.
-|--------------------------------------------------------------------------
 */
 
 function loadCommands() {
@@ -41,7 +35,6 @@ function loadCommands() {
       '[Commands] Failed to read commands directory:',
       error.message
     );
-
     return;
   }
 
@@ -75,22 +68,16 @@ function loadCommands() {
         commandModule.command ||
         path.basename(file, '.js');
 
-      name =
-        normalizeCommandName(name);
+      name = normalizeCommandName(name);
 
       if (!name) {
         continue;
       }
 
-      /*
-       * Do not allow external command files
-       * to silently replace built-in commands.
-       */
       if (commands.has(name)) {
         console.log(
           `ℹ️ Command already registered: .${name} — keeping existing command.`
         );
-
         continue;
       }
 
@@ -164,8 +151,7 @@ async function callService(
   for (const object of objects) {
     for (const method of methods) {
       if (
-        typeof object[method] ===
-        'function'
+        typeof object[method] === 'function'
       ) {
         return await object[method](...args);
       }
@@ -183,11 +169,9 @@ async function callService(
 
 async function menuCommand() {
   const names =
-    getCommandNames()
-      .filter(
-        name =>
-          name !== 'menu'
-      );
+    getCommandNames().filter(
+      name => name !== 'menu'
+    );
 
   if (!names.length) {
     return (
@@ -257,17 +241,14 @@ async function statusCommand(context) {
       context?.phone || '';
 
     const result =
-  await callService(
-    context,
-    [
-      'setAutoView',
-      'setAutoViewStatus',
-      'setAutoViewEnabled',
-      'enableAutoView'
-    ],
-    [true]
-  );
-    }
+      await callService(
+        context,
+        [
+          'getStatus',
+          'getAccountStatus'
+        ],
+        [phone]
+      ) || {};
 
     return (
       '📊 *ACCOUNT STATUS*\n\n' +
@@ -340,32 +321,42 @@ async function autoViewCommand(
     ).toLowerCase();
 
   if (action === 'status') {
-    const result =
-      await callService(
-        context,
-        [
-          'getStatus',
-          'getAccountStatus'
-        ],
-        [context?.phone]
+    try {
+      const result =
+        await callService(
+          context,
+          [
+            'getStatus',
+            'getAccountStatus'
+          ],
+          [context?.phone]
+        ) || {};
+
+      return (
+        '👁️ Auto View: ' +
+        (
+          result.autoView !== undefined
+            ? (
+                result.autoView
+                  ? 'ON'
+                  : 'OFF'
+              )
+            : (
+                result.statusMonitor
+                  ? 'ON'
+                  : 'OFF'
+              )
+        )
       );
 
-    return (
-      '👁️ Auto View: ' +
-      (
-        result?.autoView !== undefined
-          ? (
-              result.autoView
-                ? 'ON'
-                : 'OFF'
-            )
-          : (
-              result?.statusMonitor
-                ? 'ON'
-                : 'OFF'
-            )
-      )
-    );
+    } catch (error) {
+      return (
+        `❌ Auto View status error: ${
+          error?.message ||
+          'Unknown error'
+        }`
+      );
+    }
   }
 
   if (
@@ -397,11 +388,11 @@ async function autoViewCommand(
         await callService(
           context,
           [
-  'setAutoView',
-  'setAutoViewStatus',
-  'setAutoViewEnabled',
-  'enableAutoView'
-]
+            'setAutoView',
+            'setAutoViewStatus',
+            'setAutoViewEnabled',
+            'enableAutoView'
+          ],
           [true]
         );
     } else {
@@ -410,6 +401,7 @@ async function autoViewCommand(
           context,
           [
             'setAutoView',
+            'setAutoViewStatus',
             'setAutoViewEnabled',
             'disableAutoView'
           ],
@@ -454,28 +446,38 @@ async function autoLikeCommand(
     ).toLowerCase();
 
   if (action === 'status') {
-    const result =
-      await callService(
-        context,
-        [
-          'getStatus',
-          'getAccountStatus'
-        ],
-        [context?.phone]
+    try {
+      const result =
+        await callService(
+          context,
+          [
+            'getStatus',
+            'getAccountStatus'
+          ],
+          [context?.phone]
+        ) || {};
+
+      return (
+        '❤️ Auto Like: ' +
+        (
+          result.autoLike !== undefined
+            ? (
+                result.autoLike
+                  ? 'ON'
+                  : 'OFF'
+              )
+            : 'Unknown'
+        )
       );
 
-    return (
-      '❤️ Auto Like: ' +
-      (
-        result?.autoLike !== undefined
-          ? (
-              result.autoLike
-                ? 'ON'
-                : 'OFF'
-            )
-          : 'Unknown'
-      )
-    );
+    } catch (error) {
+      return (
+        `❌ Auto Like status error: ${
+          error?.message ||
+          'Unknown error'
+        }`
+      );
+    }
   }
 
   if (
@@ -563,26 +565,36 @@ async function reactionCommand(
     ).trim();
 
   if (!reaction) {
-    const result =
-      await callService(
-        context,
-        [
-          'getStatus',
-          'getAccountStatus'
-        ],
-        [context?.phone]
+    try {
+      const result =
+        await callService(
+          context,
+          [
+            'getStatus',
+            'getAccountStatus'
+          ],
+          [context?.phone]
+        ) || {};
+
+      return (
+        `❤️ Current reaction: ${
+          result.reaction ||
+          result.autoLikeReaction ||
+          result.reactionEmoji ||
+          '❤️'
+        }\n\n` +
+        'Change it with:\n' +
+        '*.reaction ❤️*'
       );
 
-    return (
-      `❤️ Current reaction: ${
-        result?.reaction ||
-        result?.autoLikeReaction ||
-        result?.reactionEmoji ||
-        '❤️'
-      }\n\n` +
-      'Change it with:\n' +
-      '*.reaction ❤️*'
-    );
+    } catch (error) {
+      return (
+        `❌ Reaction status error: ${
+          error?.message ||
+          'Unknown error'
+        }`
+      );
+    }
   }
 
   try {
@@ -945,51 +957,61 @@ async function logoutCommand(
 async function settingsCommand(
   context
 ) {
-  const result =
-    await callService(
-      context,
-      [
-        'getStatus',
-        'getAccountStatus'
-      ],
-      [context?.phone]
+  try {
+    const result =
+      await callService(
+        context,
+        [
+          'getStatus',
+          'getAccountStatus'
+        ],
+        [context?.phone]
+      ) || {};
+
+    return (
+      '⚙️ *SETTINGS*\n\n' +
+      `Account: ${
+        context?.phone ||
+        'Unknown'
+      }\n` +
+      `Connection: ${
+        result.status ||
+        'Unknown'
+      }\n` +
+      `Auto View: ${
+        result.autoView !== undefined
+          ? (
+              result.autoView
+                ? 'ON'
+                : 'OFF'
+            )
+          : 'Unknown'
+      }\n` +
+      `Auto Like: ${
+        result.autoLike !== undefined
+          ? (
+              result.autoLike
+                ? 'ON'
+                : 'OFF'
+            )
+          : 'Unknown'
+      }\n` +
+      `Reaction: ${
+        result.reaction ||
+        result.autoLikeReaction ||
+        result.reactionEmoji ||
+        '❤️'
+      }`
     );
 
-  return (
-    '⚙️ *SETTINGS*\n\n' +
-    `Account: ${
-      context?.phone ||
-      'Unknown'
-    }\n` +
-    `Connection: ${
-      result?.status ||
-      'Unknown'
-    }\n` +
-    `Auto View: ${
-      result?.autoView !== undefined
-        ? (
-            result.autoView
-              ? 'ON'
-              : 'OFF'
-          )
-        : 'Unknown'
-    }\n` +
-    `Auto Like: ${
-      result?.autoLike !== undefined
-        ? (
-            result.autoLike
-              ? 'ON'
-              : 'OFF'
-          )
-        : 'Unknown'
-    }\n` +
-    `Reaction: ${
-      result?.reaction ||
-      result?.autoLikeReaction ||
-      result?.reactionEmoji ||
-      '❤️'
-    }`
-  );
+  } catch (error) {
+    return (
+      `❌ Settings error: ${
+        error?.message ||
+        'Unknown error'
+      }`
+    );
+  }
 }
 
 /*
@@ -1001,32 +1023,42 @@ async function settingsCommand(
 async function accountCommand(
   context
 ) {
-  const result =
-    await callService(
-      context,
-      [
-        'getStatus',
-        'getAccountStatus'
-      ],
-      [context?.phone]
+  try {
+    const result =
+      await callService(
+        context,
+        [
+          'getStatus',
+          'getAccountStatus'
+        ],
+        [context?.phone]
+      ) || {};
+
+    return (
+      '👤 *ACCOUNT*\n\n' +
+      `Phone: ${
+        context?.phone ||
+        'Unknown'
+      }\n` +
+      `Status: ${
+        result.status ||
+        'Unknown'
+      }\n` +
+      `Connected: ${
+        result.connected
+          ? 'YES'
+          : 'NO'
+      }`
     );
 
-  return (
-    '👤 *ACCOUNT*\n\n' +
-    `Phone: ${
-      context?.phone ||
-      'Unknown'
-    }\n` +
-    `Status: ${
-      result?.status ||
-      'Unknown'
-    }\n` +
-    `Connected: ${
-      result?.connected
-        ? 'YES'
-        : 'NO'
-    }`
-  );
+  } catch (error) {
+    return (
+      `❌ Account error: ${
+        error?.message ||
+        'Unknown error'
+      }`
+    );
+  }
 }
 
 /*
@@ -1038,29 +1070,39 @@ async function accountCommand(
 async function trialCommand(
   context
 ) {
-  const result =
-    await callService(
-      context,
-      [
-        'getTrialStatus',
-        'getAccountStatus'
-      ],
-      [context?.phone]
+  try {
+    const result =
+      await callService(
+        context,
+        [
+          'getTrialStatus',
+          'getAccountStatus'
+        ],
+        [context?.phone]
+      ) || {};
+
+    return (
+      '🎁 *TRIAL STATUS*\n\n' +
+      `Status: ${
+        result.trialStatus ||
+        result.subscriptionStatus ||
+        'Unknown'
+      }\n` +
+      `Expires: ${
+        result.trialExpires ||
+        result.expiresAt ||
+        'Unknown'
+      }`
     );
 
-  return (
-    '🎁 *TRIAL STATUS*\n\n' +
-    `Status: ${
-      result?.trialStatus ||
-      result?.subscriptionStatus ||
-      'Unknown'
-    }\n` +
-    `Expires: ${
-      result?.trialExpires ||
-      result?.expiresAt ||
-      'Unknown'
-    }`
-  );
+  } catch (error) {
+    return (
+      `❌ Trial error: ${
+        error?.message ||
+        'Unknown error'
+      }`
+    );
+  }
 }
 
 /*
@@ -1290,8 +1332,7 @@ async function execute(
   context = {}
 ) {
   const text =
-    String(input || '')
-      .trim();
+    String(input || '').trim();
 
   if (!text) {
     return null;
@@ -1330,8 +1371,7 @@ async function execute(
 
   try {
     if (
-      typeof command ===
-      'function'
+      typeof command === 'function'
     ) {
       return await command(
         context,
@@ -1340,8 +1380,7 @@ async function execute(
     }
 
     if (
-      typeof command.execute ===
-      'function'
+      typeof command.execute === 'function'
     ) {
       return await command.execute(
         context,
@@ -1350,8 +1389,7 @@ async function execute(
     }
 
     if (
-      typeof command.run ===
-      'function'
+      typeof command.run === 'function'
     ) {
       return await command.run(
         context,
@@ -1360,8 +1398,7 @@ async function execute(
     }
 
     if (
-      typeof command.handler ===
-      'function'
+      typeof command.handler === 'function'
     ) {
       return await command.handler(
         context,
@@ -1370,8 +1407,7 @@ async function execute(
     }
 
     if (
-      typeof command.handle ===
-      'function'
+      typeof command.handle === 'function'
     ) {
       return await command.handle(
         context,
@@ -1380,8 +1416,7 @@ async function execute(
     }
 
     if (
-      typeof command.action ===
-      'function'
+      typeof command.action === 'function'
     ) {
       return await command.action(
         context,
