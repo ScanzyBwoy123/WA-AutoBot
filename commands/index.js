@@ -304,13 +304,6 @@ async function statusCommand(context) {
     );
   }
 }
-
-/*
-|--------------------------------------------------------------------------
-| AUTO VIEW
-|--------------------------------------------------------------------------
-*/
-
 async function autoViewCommand(
   context,
   args
@@ -319,36 +312,95 @@ async function autoViewCommand(
     String(
       args?.[0] || ''
     ).toLowerCase();
-
-  if (action === 'status') {
+  const phone =
+    context?.phone;
+  const service =
+    context?.service;
+  const multiAccountService =
+    context?.multiAccountService ||
+    context?.accountService;
+  /*
+   * --------------------------------------------------------
+   * CHECK PHONE
+   * --------------------------------------------------------
+   */
+  if (!phone) {
+    return (
+      '❌ Auto View error: ' +
+      'Account phone number is missing.'
+    );
+  }
+  /*
+   * --------------------------------------------------------
+   * SUPPORT OLD + NEW COMMAND STYLES
+   * --------------------------------------------------------
+   *
+   * .autoview on
+   * .autoview enable
+   * .autoview start
+   *
+   * .autoview off
+   * .autoview disable
+   * .autoview stop
+   */
+  const normalizedAction =
+    action === 'start'
+      ? 'on'
+      : action === 'stop'
+        ? 'off'
+        : action;
+  /*
+   * --------------------------------------------------------
+   * STATUS
+   * --------------------------------------------------------
+   */
+  if (
+    normalizedAction === 'status'
+  ) {
     try {
-      const result =
-        await callService(
-          context,
-          [
-            'getStatus',
-            'getAccountStatus'
-          ],
-          [context?.phone]
-        ) || {};
-
+      let account = null;
+      if (
+        typeof multiAccountService?.getAccount ===
+        'function'
+      ) {
+        account =
+          multiAccountService.getAccount(
+            phone
+          );
+      }
+      let workerStatus = null;
+      if (
+        typeof service?.getStatus ===
+        'function'
+      ) {
+        workerStatus =
+          service.getStatus(phone);
+      }
+      const accountEnabled =
+        account?.autoViewStatus === true ||
+        account?.statusView === true;
+      const workerRunning =
+        workerStatus?.running === true;
+      const workerAutoView =
+        workerStatus?.autoView === true;
       return (
-        '👁️ Auto View: ' +
-        (
-          result.autoView !== undefined
-            ? (
-                result.autoView
-                  ? 'ON'
-                  : 'OFF'
-              )
-            : (
-                result.statusMonitor
-                  ? 'ON'
-                  : 'OFF'
-              )
-        )
+        '👁️ *AUTO VIEW STATUS*\n\n' +
+        `Account setting: ${
+          accountEnabled
+            ? 'ON ✅'
+            : 'OFF 🛑'
+        }\n` +
+        `Status worker: ${
+          workerRunning
+            ? 'RUNNING ✅'
+            : 'STOPPED 🛑'
+        }\n` +
+        `Auto View engine: ${
+          workerAutoView
+            ? 'ACTIVE ✅'
+            : 'INACTIVE 🛑'
+        }`
       );
-
     } catch (error) {
       return (
         `❌ Auto View status error: ${
@@ -358,69 +410,206 @@ async function autoViewCommand(
       );
     }
   }
-
+  /*
+   * --------------------------------------------------------
+   * VALIDATE ACTION
+   * --------------------------------------------------------
+   */
   if (
     ![
       'on',
       'off',
       'enable',
       'disable'
-    ].includes(action)
+    ].includes(
+      normalizedAction
+    )
   ) {
     return (
       '👁️ *AUTO VIEW*\n\n' +
       'Use:\n' +
       '• *.autoview on*\n' +
       '• *.autoview off*\n' +
+      '• *.autoview start*\n' +
+      '• *.autoview stop*\n' +
       '• *.autoview status*'
     );
   }
-
   const enabled =
-    action === 'on' ||
-    action === 'enable';
-
+    normalizedAction === 'on' ||
+    normalizedAction === 'enable';
+  /*
+   * --------------------------------------------------------
+   * MAKE SURE THE SERVICE EXISTS
+   * --------------------------------------------------------
+   */
+  if (!multiAccountService) {
+    return (
+      '❌ Auto View error: ' +
+      'Multi-account service is unavailable.'
+    );
+  }
   try {
-    let result;
-
-    if (enabled) {
-      result =
-        await callService(
-          context,
-          [
-            'setAutoView',
-            'setAutoViewStatus',
-            'setAutoViewEnabled',
-            'enableAutoView'
-          ],
-          [context?.phone, true]  // ✅ FIXED: Pass phone + enabled
-        );
-    } else {
-      result =
-        await callService(
-          context,
-          [
-            'setAutoView',
-            'setAutoViewStatus',
-            'setAutoViewEnabled',
-            'disableAutoView'
-          ],
-          [context?.phone, false]  // ✅ FIXED: Pass phone + enabled
+    /*
+     * ------------------------------------------------------
+     * GET ACCOUNT
+     * ------------------------------------------------------
+     */
+    let account = null;
+    if (
+      typeof multiAccountService.getAccount ===
+      'function'
+    ) {
+      account =
+        multiAccountService.getAccount(
+          phone
         );
     }
-
-    if (result === undefined) {
+    if (!account) {
       return (
-        '❌ Auto View could not be changed.\n' +
-        'The WhatsApp service does not expose the Auto View setting.'
+        '❌ Auto View error: ' +
+        'Account not found.'
       );
     }
-
-    return enabled
-      ? '✅ Auto View enabled. The Status monitor is now active.'
-      : '🛑 Auto View disabled.';
-
+    /*
+     * ------------------------------------------------------
+     * SAVE THE SETTING
+     * ------------------------------------------------------
+     *
+     * Prefer the official service method if available.
+     */
+    let settingChanged = false;
+    if (
+      typeof multiAccountService.setAutoViewStatus ===
+      'function'
+    ) {
+      settingChanged =
+        await multiAccountService.setAutoViewStatus(
+          phone,
+          enabled
+        );
+    } else {
+      /*
+       * Fallback for compatibility with older versions.
+       */
+      account.autoViewStatus =
+        enabled;
+      account.updatedAt =
+        new Date().toISOString();
+      if (
+        typeof multiAccountService.saveAccounts ===
+        'function'
+      ) {
+        await multiAccountService.saveAccounts();
+      }
+      settingChanged = true;
+    }
+    if (!settingChanged) {
+      return (
+        '❌ Auto View setting could not be changed.'
+      );
+    }
+    /*
+     * ------------------------------------------------------
+     * REFRESH ACCOUNT DATA
+     * ------------------------------------------------------
+     */
+    if (
+      typeof multiAccountService.getAccount ===
+      'function'
+    ) {
+      account =
+        multiAccountService.getAccount(
+          phone
+        );
+    }
+    /*
+     * ------------------------------------------------------
+     * START / RESTART STATUS ENGINE
+     * ------------------------------------------------------
+     *
+     * THIS IS THE IMPORTANT FIX.
+     *
+     * Changing autoViewStatus in accounts.json does not
+     * automatically change the already-running StatusEngine.
+     */
+    if (typeof service?.startStatusMonitor === 'function') {
+      const monitorStarted =
+        await service.startStatusMonitor(
+          phone
+        );
+      if (enabled && !monitorStarted) {
+        return (
+          '⚠️ Auto View setting was saved, ' +
+          'but the Status monitor could not be started.\n\n' +
+          'Make sure the WhatsApp account is connected.'
+        );
+      }
+    }
+    /*
+     * ------------------------------------------------------
+     * STOP ENGINE WHEN BOTH AUTOMATIONS ARE OFF
+     * ------------------------------------------------------
+     */
+    if (!enabled) {
+      const autoLike =
+        account?.autoLike === true;
+      const autoView =
+        account?.autoViewStatus === true ||
+        account?.statusView === true;
+      if (
+        !autoView &&
+        !autoLike &&
+        typeof service?.stopStatusMonitor ===
+        'function'
+      ) {
+        await service.stopStatusMonitor(
+          phone
+        );
+      }
+    }
+    /*
+     * ------------------------------------------------------
+     * CONFIRM ACTUAL ENGINE STATE
+     * ------------------------------------------------------
+     */
+    let workerStatus = null;
+    if (
+      typeof service?.getStatus ===
+      'function'
+    ) {
+      workerStatus =
+        service.getStatus(phone);
+    }
+    if (enabled) {
+      if (
+        workerStatus &&
+        workerStatus.autoView === true
+      ) {
+        return (
+          '✅ Auto View enabled.\n\n' +
+          '👁️ Status monitor is running and ' +
+          'ready to process new WhatsApp Status messages.'
+        );
+      }
+      /*
+       * Setting was saved but engine state could not
+       * be confirmed.
+       */
+      return (
+        '⚠️ Auto View setting was saved, ' +
+        'but the Status engine is not currently reporting Auto View as active.'
+      );
+    }
+    return (
+      '🛑 Auto View disabled.\n\n' +
+      'The Status engine has been updated.'
+    );
   } catch (error) {
+    console.error(
+      '[AutoView] Error:',
+      error
+    );
     return (
       `❌ Auto View error: ${
         error?.message ||
@@ -429,119 +618,12 @@ async function autoViewCommand(
     );
   }
 }
-async function autoLikeCommand(context, args) {
-  const action = String(args?.[0] || '').toLowerCase();
+/*
+|--------------------------------------------------------------------------
+| AUTO VIEW
+|--------------------------------------------------------------------------
+*/
 
-  const phone = context?.phone;
-  const multiAccountService =
-    context?.multiAccountService ||
-    context?.accountService;
-
-  const service = context?.service;
-
-  if (!phone) {
-    return '❌ Auto Like error: Account phone number is missing.';
-  }
-
-  // Support both the old and new command styles
-  const normalizedAction =
-    action === 'start' ? 'on' :
-    action === 'stop' ? 'off' :
-    action;
-
-  // STATUS
-  if (normalizedAction === 'status') {
-    try {
-      const account =
-        typeof multiAccountService?.getAccount === 'function'
-          ? multiAccountService.getAccount(phone)
-          : null;
-
-      if (!account) {
-        return '❌ Auto Like status: Account not found.';
-      }
-
-      const enabled = account.autoLike === true;
-
-      return (
-        '❤️ *AUTO LIKE STATUS*\n\n' +
-        `Status: ${enabled ? 'ON ✅' : 'OFF 🛑'}\n` +
-        `Account: ${phone}`
-      );
-    } catch (error) {
-      return `❌ Auto Like status error: ${
-        error?.message || 'Unknown error'
-      }`;
-    }
-  }
-
-  // VALIDATE ACTION
-  if (!['on', 'off', 'enable', 'disable'].includes(normalizedAction)) {
-    return (
-      '❤️ *AUTO LIKE*\n\n' +
-      'Use:\n' +
-      '• *.autolike on*\n' +
-      '• *.autolike off*\n' +
-      '• *.autolike status*'
-    );
-  }
-
-  const enabled =
-    normalizedAction === 'on' ||
-    normalizedAction === 'enable';
-
-  try {
-    if (!multiAccountService) {
-      return '❌ Auto Like error: Multi-account service is unavailable.';
-    }
-
-    const account =
-      typeof multiAccountService.getAccount === 'function'
-        ? multiAccountService.getAccount(phone)
-        : null;
-
-    if (!account) {
-      return '❌ Auto Like error: Account not found.';
-    }
-
-    // Make sure the account setting actually changes
-    account.autoLike = enabled;
-    account.updatedAt = new Date().toISOString();
-
-    if (typeof multiAccountService.saveAccounts === 'function') {
-      multiAccountService.saveAccounts();
-    }
-
-    // Restart the status monitor so the new setting takes effect immediately
-    if (typeof service?.startStatusMonitor === 'function') {
-      await service.startStatusMonitor(phone);
-    }
-
-    if (!enabled) {
-      // If Auto View is also disabled, stop the worker completely
-      const autoView =
-        account.autoViewStatus === true ||
-        account.statusView === true;
-
-      if (!autoView && typeof service?.stopStatusMonitor === 'function') {
-        await service.stopStatusMonitor(phone);
-      }
-    }
-
-    return enabled
-      ? '❤️ Auto Like enabled. New WhatsApp Status messages will now be reacted to automatically.'
-      : '🛑 Auto Like disabled.';
-
-  } catch (error) {
-    console.error('[AutoLike] Error:', error);
-
-    return (
-      `❌ Auto Like error: ${
-        error?.message || 'Unknown error'
-      }`
-    );
-  }
-}
 /*
 |--------------------------------------------------------------------------
 | AUTO LIKE
