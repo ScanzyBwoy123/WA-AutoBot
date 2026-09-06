@@ -429,65 +429,54 @@ async function autoViewCommand(
     );
   }
 }
+async function autoLikeCommand(context, args) {
+  const action = String(args?.[0] || '').toLowerCase();
 
-/*
-|--------------------------------------------------------------------------
-| AUTO LIKE
-|--------------------------------------------------------------------------
-*/
+  const phone = context?.phone;
+  const multiAccountService =
+    context?.multiAccountService ||
+    context?.accountService;
 
-async function autoLikeCommand(
-  context,
-  args
-) {
-  const action =
-    String(
-      args?.[0] || ''
-    ).toLowerCase();
+  const service = context?.service;
 
-  if (action === 'status') {
+  if (!phone) {
+    return '❌ Auto Like error: Account phone number is missing.';
+  }
+
+  // Support both the old and new command styles
+  const normalizedAction =
+    action === 'start' ? 'on' :
+    action === 'stop' ? 'off' :
+    action;
+
+  // STATUS
+  if (normalizedAction === 'status') {
     try {
-      const result =
-        await callService(
-          context,
-          [
-            'getStatus',
-            'getAccountStatus'
-          ],
-          [context?.phone]
-        ) || {};
+      const account =
+        typeof multiAccountService?.getAccount === 'function'
+          ? multiAccountService.getAccount(phone)
+          : null;
+
+      if (!account) {
+        return '❌ Auto Like status: Account not found.';
+      }
+
+      const enabled = account.autoLike === true;
 
       return (
-        '❤️ Auto Like: ' +
-        (
-          result.autoLike !== undefined
-            ? (
-                result.autoLike
-                  ? 'ON'
-                  : 'OFF'
-              )
-            : 'Unknown'
-        )
+        '❤️ *AUTO LIKE STATUS*\n\n' +
+        `Status: ${enabled ? 'ON ✅' : 'OFF 🛑'}\n` +
+        `Account: ${phone}`
       );
-
     } catch (error) {
-      return (
-        `❌ Auto Like status error: ${
-          error?.message ||
-          'Unknown error'
-        }`
-      );
+      return `❌ Auto Like status error: ${
+        error?.message || 'Unknown error'
+      }`;
     }
   }
 
-  if (
-    ![
-      'on',
-      'off',
-      'enable',
-      'disable'
-    ].includes(action)
-  ) {
+  // VALIDATE ACTION
+  if (!['on', 'off', 'enable', 'disable'].includes(normalizedAction)) {
     return (
       '❤️ *AUTO LIKE*\n\n' +
       'Use:\n' +
@@ -498,56 +487,68 @@ async function autoLikeCommand(
   }
 
   const enabled =
-    action === 'on' ||
-    action === 'enable';
+    normalizedAction === 'on' ||
+    normalizedAction === 'enable';
 
   try {
-    let result;
-
-    if (enabled) {
-      result =
-        await callService(
-          context,
-          [
-            'setAutoLike',
-            'setAutoLikeEnabled',
-            'enableAutoLike'
-          ],
-          [context?.phone, true]  // ✅ FIXED: Pass phone + enabled
-        );
-    } else {
-      result =
-        await callService(
-          context,
-          [
-            'setAutoLike',
-            'setAutoLikeEnabled',
-            'disableAutoLike'
-          ],
-          [context?.phone, false]  // ✅ FIXED: Pass phone + enabled
-        );
+    if (!multiAccountService) {
+      return '❌ Auto Like error: Multi-account service is unavailable.';
     }
 
-    if (result === undefined) {
-      return (
-        '❌ Auto Like could not be changed.\n' +
-        'The WhatsApp service does not expose the Auto Like setting.'
-      );
+    const account =
+      typeof multiAccountService.getAccount === 'function'
+        ? multiAccountService.getAccount(phone)
+        : null;
+
+    if (!account) {
+      return '❌ Auto Like error: Account not found.';
+    }
+
+    // Make sure the account setting actually changes
+    account.autoLike = enabled;
+    account.updatedAt = new Date().toISOString();
+
+    if (typeof multiAccountService.saveAccounts === 'function') {
+      multiAccountService.saveAccounts();
+    }
+
+    // Restart the status monitor so the new setting takes effect immediately
+    if (typeof service?.startStatusMonitor === 'function') {
+      await service.startStatusMonitor(phone);
+    }
+
+    if (!enabled) {
+      // If Auto View is also disabled, stop the worker completely
+      const autoView =
+        account.autoViewStatus === true ||
+        account.statusView === true;
+
+      if (!autoView && typeof service?.stopStatusMonitor === 'function') {
+        await service.stopStatusMonitor(phone);
+      }
     }
 
     return enabled
-      ? '❤️ Auto Like enabled. New eligible Status messages will be reacted to.'
+      ? '❤️ Auto Like enabled. New WhatsApp Status messages will now be reacted to automatically.'
       : '🛑 Auto Like disabled.';
 
   } catch (error) {
+    console.error('[AutoLike] Error:', error);
+
     return (
       `❌ Auto Like error: ${
-        error?.message ||
-        'Unknown error'
+        error?.message || 'Unknown error'
       }`
     );
   }
 }
+/*
+|--------------------------------------------------------------------------
+| AUTO LIKE
+|--------------------------------------------------------------------------
+*/
+
+
 
 /*
 |--------------------------------------------------------------------------
