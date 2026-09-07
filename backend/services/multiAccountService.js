@@ -455,20 +455,11 @@ class MultiAccountService {
    */
 
   checkAccount(phone) {
-    checkAccount(phone) {
     const account =
       this.getAccount(
         phone
       );
-if (result.reason === 'DEVELOPER_TEST') {
-  return {
-    allowed: true,
-    reason: 'DEVELOPER_TEST',
-    message: 'Developer test mode active.',
-    remainingTime: 'Unlimited test access',
-    account: result.account
-  };
-}
+
     // TEMPORARY DEVELOPER TEST ACCESS
     const devMode =
       String(process.env.DEV_MODE || '').toLowerCase() === 'true';
@@ -496,6 +487,7 @@ if (result.reason === 'DEVELOPER_TEST') {
     }
 
     if (!account) {
+     
       return {
 
     if (!account) {
