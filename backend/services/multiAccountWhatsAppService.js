@@ -56,6 +56,14 @@ class MultiAccountWhatsAppService {
     this.maxRetries = 5;
 
     /*
+     * Command router cache
+     *
+     * The command router should NOT be deleted from
+     * require.cache every time a WhatsApp message arrives.
+     */
+    this.commandRouter = null;
+
+    /*
      * WhatsApp sessions
      */
     this.sessionsDir = path.join(
@@ -262,9 +270,28 @@ class MultiAccountWhatsAppService {
    * ============================================================
    * COMMAND ROUTER
    * ============================================================
+   *
+   * IMPORTANT:
+   * Do NOT delete require.cache here.
+   *
+   * The old implementation reloaded commands/index.js every
+   * time a command was received. That can trigger circular
+   * dependency problems because command files can themselves
+   * reference the command router.
    */
 
   getCommandRouter() {
+    /*
+     * Return the already loaded router.
+     */
+    if (
+      this.commandRouter &&
+      typeof this.commandRouter.execute ===
+        'function'
+    ) {
+      return this.commandRouter;
+    }
+
     const candidates = [
       path.resolve(
         __dirname,
@@ -293,9 +320,14 @@ class MultiAccountWhatsAppService {
           continue;
         }
 
-        delete require.cache[
-          require.resolve(file)
-        ];
+        /*
+         * IMPORTANT:
+         * We intentionally DO NOT do:
+         *
+         * delete require.cache[require.resolve(file)];
+         *
+         * The router must remain cached and stable.
+         */
 
         const router =
           require(file);
@@ -305,15 +337,29 @@ class MultiAccountWhatsAppService {
           typeof router.execute ===
             'function'
         ) {
-          return router;
+          this.commandRouter = router;
+
+          console.log(
+            `[Commands] Command router loaded: ${file}`
+          );
+
+          return this.commandRouter;
         }
+
+        console.error(
+          `[Commands] Invalid router export from ${file}.`
+        );
       } catch (error) {
         console.error(
           `[Commands] Failed loading ${file}:`,
-          error.message
+          error
         );
       }
     }
+
+    console.error(
+      '[Commands] No valid command router could be loaded.'
+    );
 
     return null;
   }
@@ -851,6 +897,10 @@ class MultiAccountWhatsAppService {
       this.getClient(normalized);
 
     if (!client) {
+      console.log(
+        `[StatusEngine] No WhatsApp client for ${normalized}.`
+      );
+
       return false;
     }
 
