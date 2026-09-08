@@ -381,11 +381,6 @@ async viewStatus(phone, message = null) {
   }
 
   try {
-    /*
-     * First obtain the Broadcast through whatsapp-web.js.
-     * This gives us the actual Status messages even when
-     * the original message event does not contain an ID.
-     */
     const broadcast =
       await client.getBroadcastById(participant);
 
@@ -413,188 +408,306 @@ async viewStatus(phone, message = null) {
     }
 
     /*
-     * Prefer an unread Status.
-     * If none is unread, fall back to the newest Status.
+     * Find the unread Status first.
      */
-    let target =
+    const target =
       statuses.find(status =>
         status?.viewed !== true &&
         status?._data?.viewed !== true
       ) || statuses[statuses.length - 1];
 
-    const statusId =
-      target?.id?._serialized ||
-      target?._data?.id?._serialized ||
+    const rawStatusId =
       target?.id?.id ||
       target?._data?.id?.id ||
       null;
 
-    if (!statusId) {
+    const serializedStatusId =
+      target?.id?._serialized ||
+      target?._data?.id?._serialized ||
+      null;
+
+    if (!rawStatusId && !serializedStatusId) {
       console.log(
-        `[StatusEngine] Could not resolve the real Status ID`
+        `[StatusEngine] Could not resolve Status message ID`
       );
       return false;
     }
+
+    /*
+     * WPPConnect/WhatsApp Web expects the full Status key:
+     *
+     * false_status@broadcast_STATUS_ID_PARTICIPANT
+     *
+     * Example:
+     * false_status@broadcast_ABC123_123456789@c.us
+     */
+    const statusMessageKey =
+      serializedStatusId &&
+      serializedStatusId.startsWith(
+        'false_status@broadcast_'
+      )
+        ? serializedStatusId
+        : `false_status@broadcast_${rawStatusId || serializedStatusId}_${participant}`;
 
     const beforeViewed =
       target?.viewed === true ||
       target?._data?.viewed === true;
 
     console.log(
-      `[StatusEngine] REAL Status ID: ${statusId}`
+      `[StatusEngine] Raw Status ID: ${rawStatusId}`
+    );
+
+    console.log(
+      `[StatusEngine] Full Status key: ${statusMessageKey}`
     );
 
     console.log(
       `[StatusEngine] Status viewed BEFORE: ${beforeViewed}`
     );
 
-    /*
-     * IMPORTANT:
-     * Do NOT use message.sendSeen() here.
-     *
-     * WhatsApp Statuses use the Status collection's
-     * sendReadStatus() operation.
-     */
-    const result = await client.pupPage.evaluate(
-      async ({ participant, statusId }) => {
-        try {
-          const collections =
-            window.require('WAWebCollections');
-
-          let status =
-            collections.Status.get(participant);
-
-          if (!status) {
-            status =
-              await collections.Status.find(participant);
-          }
-
-          if (!status) {
-            return {
-              ok: false,
-              reason: 'STATUS_OWNER_NOT_FOUND'
-            };
-          }
-
-          const messages =
-            status.msgs;
-
-          if (!messages) {
-            return {
-              ok: false,
-              reason: 'STATUS_MESSAGES_NOT_FOUND'
-            };
-          }
-
-          let targetMessage = null;
-
-          /*
-           * Try the collection's direct get() first.
-           */
+    const result =
+      await client.pupPage.evaluate(
+        async ({
+          participant,
+          statusMessageKey,
+          rawStatusId,
+          serializedStatusId
+        }) => {
           try {
-            targetMessage =
-              messages.get(statusId);
-          } catch (_) {}
+            const collections =
+              window.require('WAWebCollections');
 
-          /*
-           * If WhatsApp uses a different internal key,
-           * search the collection models.
-           */
-          if (!targetMessage && Array.isArray(messages.models)) {
-            targetMessage =
-              messages.models.find(msg => {
-                const serialized =
-                  msg?.id?._serialized ||
-                  msg?.id?.id ||
-                  null;
+            /*
+             * Get the StatusV3/Broadcast model.
+             */
+            let status =
+              collections.Status.get(participant);
 
-                return serialized === statusId;
-              });
-          }
+            if (!status) {
+              status =
+                await collections.Status.find(
+                  participant
+                );
+            }
 
-          /*
-           * Some WhatsApp builds expose msgs as an array.
-           */
-          if (!targetMessage && Array.isArray(messages)) {
-            targetMessage =
-              messages.find(msg => {
-                const serialized =
-                  msg?.id?._serialized ||
-                  msg?.id?.id ||
-                  null;
+            if (!status) {
+              return {
+                ok: false,
+                reason: 'STATUS_OWNER_NOT_FOUND'
+              };
+            }
 
-                return serialized === statusId;
-              });
-          }
+            /*
+             * StatusV3Model has its own sendReadStatus()
+             * operation.
+             */
+            if (
+              typeof status.sendReadStatus !==
+              'function'
+            ) {
+              return {
+                ok: false,
+                reason:
+                  'STATUS_SEND_READ_STATUS_NOT_AVAILABLE'
+              };
+            }
 
-          if (!targetMessage) {
+            const messages =
+              status.msgs;
+
+            if (!messages) {
+              return {
+                ok: false,
+                reason:
+                  'STATUS_MESSAGES_COLLECTION_NOT_FOUND'
+              };
+            }
+
+            let targetMessage = null;
+
+            /*
+             * 1. Try the exact full serialized key.
+             */
+            try {
+              if (
+                typeof messages.get ===
+                'function'
+              ) {
+                targetMessage =
+                  messages.get(
+                    statusMessageKey
+                  );
+              }
+            } catch (_) {}
+
+            /*
+             * 2. Search collection models.
+             */
+            if (
+              !targetMessage &&
+              Array.isArray(messages.models)
+            ) {
+              targetMessage =
+                messages.models.find(msg => {
+                  const id =
+                    msg?.id;
+
+                  const serialized =
+                    id?._serialized ||
+                    null;
+
+                  const raw =
+                    id?.id ||
+                    null;
+
+                  return (
+                    serialized ===
+                      statusMessageKey ||
+                    serialized ===
+                      serializedStatusId ||
+                    raw === rawStatusId
+                  );
+                });
+            }
+
+            /*
+             * 3. Some WhatsApp builds expose the
+             * collection differently.
+             */
+            if (
+              !targetMessage &&
+              Array.isArray(messages)
+            ) {
+              targetMessage =
+                messages.find(msg => {
+                  const id =
+                    msg?.id;
+
+                  const serialized =
+                    id?._serialized ||
+                    null;
+
+                  const raw =
+                    id?.id ||
+                    null;
+
+                  return (
+                    serialized ===
+                      statusMessageKey ||
+                    serialized ===
+                      serializedStatusId ||
+                    raw === rawStatusId
+                  );
+                });
+            }
+
+            if (!targetMessage) {
+              /*
+               * Diagnostic information so the next
+               * failure tells us exactly how the
+               * current WhatsApp build stores the key.
+               */
+              let availableIds = [];
+
+              try {
+                if (
+                  Array.isArray(messages.models)
+                ) {
+                  availableIds =
+                    messages.models
+                      .slice(0, 20)
+                      .map(msg => ({
+                        serialized:
+                          msg?.id?._serialized ||
+                          null,
+                        raw:
+                          msg?.id?.id ||
+                          null,
+                        participant:
+                          msg?.id?.participant ||
+                          null
+                      }));
+                }
+              } catch (_) {}
+
+              return {
+                ok: false,
+                reason:
+                  'STATUS_MESSAGE_NOT_FOUND',
+                requestedKey:
+                  statusMessageKey,
+                rawStatusId,
+                serializedStatusId,
+                availableIds
+              };
+            }
+
+            const mediaKeyTimestamp =
+              targetMessage.mediaKeyTimestamp ||
+              targetMessage._data
+                ?.mediaKeyTimestamp ||
+              null;
+
+            /*
+             * THIS is the Status-specific read
+             * operation.
+             */
+            await status.sendReadStatus(
+              targetMessage,
+              mediaKeyTimestamp
+            );
+
+            return {
+              ok: true,
+              viewed:
+                targetMessage.viewed === true ||
+                targetMessage._data
+                  ?.viewed === true,
+              resolvedId:
+                targetMessage.id
+                  ?._serialized ||
+                targetMessage.id?.id ||
+                null
+            };
+
+          } catch (error) {
             return {
               ok: false,
-              reason: 'STATUS_MESSAGE_NOT_FOUND'
+              reason:
+                error?.message ||
+                String(error)
             };
           }
-
-          if (
-            typeof status.sendReadStatus !== 'function'
-          ) {
-            return {
-              ok: false,
-              reason: 'SEND_READ_STATUS_NOT_AVAILABLE'
-            };
-          }
-
-          const mediaKeyTimestamp =
-            targetMessage.mediaKeyTimestamp ||
-            targetMessage._data?.mediaKeyTimestamp ||
-            null;
-
-          /*
-           * THIS is the actual Status-view operation.
-           */
-          await status.sendReadStatus(
-            targetMessage,
-            mediaKeyTimestamp
-          );
-
-          return {
-            ok: true,
-            viewed:
-              targetMessage.viewed === true ||
-              targetMessage._data?.viewed === true
-          };
-
-        } catch (error) {
-          return {
-            ok: false,
-            reason: error?.message || String(error)
-          };
+        },
+        {
+          participant,
+          statusMessageKey,
+          rawStatusId,
+          serializedStatusId
         }
-      },
-      {
-        participant,
-        statusId
-      }
-    );
+      );
 
     console.log(
       `[StatusEngine] sendReadStatus result: ${JSON.stringify(result)}`
     );
 
     /*
-     * Give WhatsApp Web time to update the Status model.
+     * Allow WhatsApp Web to update its Status state.
      */
     await new Promise(resolve =>
-      setTimeout(resolve, 2000)
+      setTimeout(resolve, 2500)
     );
 
     /*
-     * Reload the Broadcast and verify the result.
+     * Refresh the Broadcast.
      */
     let refreshedBroadcast = null;
 
     try {
       refreshedBroadcast =
-        await client.getBroadcastById(participant);
+        await client.getBroadcastById(
+          participant
+        );
     } catch (error) {
       console.log(
         `[StatusEngine] Broadcast refresh failed: ${error?.message || error}`
@@ -603,18 +716,20 @@ async viewStatus(phone, message = null) {
 
     let refreshedTarget = null;
 
-    if (refreshedBroadcast?.msgs?.length) {
+    if (
+      refreshedBroadcast?.msgs?.length
+    ) {
       refreshedTarget =
-        refreshedBroadcast.msgs.find(status => {
-          const id =
-            status?.id?._serialized ||
-            status?._data?.id?._serialized ||
-            status?.id?.id ||
-            status?._data?.id?.id ||
-            null;
+        refreshedBroadcast.msgs.find(
+          status => {
+            const raw =
+              status?.id?.id ||
+              status?._data?.id?.id ||
+              null;
 
-          return id === statusId;
-        });
+            return raw === rawStatusId;
+          }
+        );
     }
 
     const afterViewed =
@@ -634,14 +749,14 @@ async viewStatus(phone, message = null) {
 
     if (afterViewed) {
       console.log(
-        `✅ [StatusEngine] VERIFIED STATUS VIEW: ${statusId}`
+        `✅ [StatusEngine] VERIFIED STATUS VIEW: ${statusMessageKey}`
       );
 
       return true;
     }
 
     console.log(
-      `⚠️ [StatusEngine] STATUS VIEW NOT VERIFIED: ${statusId}`
+      `⚠️ [StatusEngine] STATUS VIEW NOT VERIFIED: ${statusMessageKey}`
     );
 
     return false;
