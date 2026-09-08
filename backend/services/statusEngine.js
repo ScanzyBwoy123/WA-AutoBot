@@ -391,15 +391,128 @@ class StatusEngine {
   }
 
   console.log(
-    `[StatusEngine] Attempting to view Status ${statusId} for ${normalized}`
+    `[StatusEngine] Attempting VERIFIED view of Status ${statusId} for ${normalized}`
   );
 
   /*
-   * whatsapp-web.js exposes sendSeen() as a chat-level
-   * operation. We therefore do not claim that the individual
-   * Status was definitely viewed merely because the Promise
-   * resolved.
+   * ----------------------------------------------------------
+   * READ THE ACTUAL STATUS MODEL
+   * ----------------------------------------------------------
+   *
+   * WhatsApp Status messages expose a "viewed" property.
+   * We inspect it before and after the read operation.
+   *
+   * This prevents us from reporting success merely because
+   * sendSeen() returned without throwing.
    */
+
+  const getViewedState = () => {
+    return (
+      message?.viewed === true ||
+      message?._data?.viewed === true
+    );
+  };
+
+  const beforeViewed =
+    getViewedState();
+
+  console.log(
+    `[StatusEngine] Status ${statusId} viewed BEFORE request: ${beforeViewed}`
+  );
+
+  /*
+   * ----------------------------------------------------------
+   * INTERNAL WHATSAPP MODEL DIAGNOSTIC
+   * ----------------------------------------------------------
+   *
+   * whatsapp-web.js exposes pupPage and WWebJS internally.
+   * We use this only to inspect the actual Status model.
+   */
+
+  let internalBefore = null;
+
+  try {
+    if (
+      client.pupPage &&
+      typeof client.pupPage.evaluate === 'function'
+    ) {
+      internalBefore =
+        await client.pupPage.evaluate(
+          async msgId => {
+            try {
+              const collections =
+                window.require?.(
+                  'WAWebCollections'
+                );
+
+              if (!collections?.Msg) {
+                return {
+                  available: false,
+                  reason: 'WAWebCollections.Msg unavailable'
+                };
+              }
+
+              const msg =
+                collections.Msg.get(msgId) ||
+                (
+                  await collections.Msg
+                    .getMessagesById([msgId])
+                )?.messages?.[0];
+
+              if (!msg) {
+                return {
+                  available: true,
+                  found: false
+                };
+              }
+
+              return {
+                available: true,
+                found: true,
+                viewed:
+                  msg.viewed === true,
+                isStatus:
+                  msg.isStatus === true ||
+                  msg.isStatusV3 === true,
+                remote:
+                  msg.id?.remote?._serialized ||
+                  msg.id?.remote ||
+                  null
+              };
+            } catch (error) {
+              return {
+                available: false,
+                error:
+                  error?.message ||
+                  String(error)
+              };
+            }
+          },
+          statusId
+        );
+
+      console.log(
+        '[StatusEngine] Internal Status state BEFORE:',
+        JSON.stringify(internalBefore)
+      );
+    }
+  } catch (error) {
+    console.log(
+      `[StatusEngine] Internal Status inspection failed:`,
+      error?.message || error
+    );
+  }
+
+  /*
+   * ----------------------------------------------------------
+   * CURRENT PUBLIC API ATTEMPT
+   * ----------------------------------------------------------
+   *
+   * Keep the existing operation, but DO NOT consider it
+   * successful yet.
+   */
+
+  let requestSent = false;
 
   try {
     if (
@@ -408,42 +521,142 @@ class StatusEngine {
     ) {
       await message.sendSeen();
 
-      console.log(
-        `[StatusEngine] Status read request sent for ${statusId} (${normalized})`
-      );
+      requestSent = true;
 
-      return true;
+      console.log(
+        `[StatusEngine] message.sendSeen() completed for ${statusId}`
+      );
     }
   } catch (error) {
     console.log(
-      `[StatusEngine] message.sendSeen() failed for ${normalized}:`,
+      `[StatusEngine] message.sendSeen() failed:`,
       error?.message || error
     );
   }
+
+  /*
+   * Give WhatsApp Web a moment to update its message model.
+   */
+
+  await new Promise(resolve =>
+    setTimeout(resolve, 1500)
+  );
+
+  /*
+   * ----------------------------------------------------------
+   * CHECK THE STATUS AGAIN
+   * ----------------------------------------------------------
+   */
+
+  let internalAfter = null;
 
   try {
     if (
-      typeof client.sendSeen === 'function'
+      client.pupPage &&
+      typeof client.pupPage.evaluate === 'function'
     ) {
-      await client.sendSeen(
-        'status@broadcast'
-      );
+      internalAfter =
+        await client.pupPage.evaluate(
+          async msgId => {
+            try {
+              const collections =
+                window.require?.(
+                  'WAWebCollections'
+                );
+
+              if (!collections?.Msg) {
+                return {
+                  available: false,
+                  reason: 'WAWebCollections.Msg unavailable'
+                };
+              }
+
+              const msg =
+                collections.Msg.get(msgId) ||
+                (
+                  await collections.Msg
+                    .getMessagesById([msgId])
+                )?.messages?.[0];
+
+              if (!msg) {
+                return {
+                  available: true,
+                  found: false
+                };
+              }
+
+              return {
+                available: true,
+                found: true,
+                viewed:
+                  msg.viewed === true,
+                isStatus:
+                  msg.isStatus === true ||
+                  msg.isStatusV3 === true
+              };
+            } catch (error) {
+              return {
+                available: false,
+                error:
+                  error?.message ||
+                  String(error)
+              };
+            }
+          },
+          statusId
+        );
 
       console.log(
-        `[StatusEngine] Status chat read request sent for ${statusId} (${normalized})`
+        '[StatusEngine] Internal Status state AFTER:',
+        JSON.stringify(internalAfter)
       );
-
-      return true;
     }
   } catch (error) {
     console.log(
-      `[StatusEngine] client.sendSeen() failed for ${normalized}:`,
+      `[StatusEngine] Internal Status verification failed:`,
       error?.message || error
     );
   }
 
+  const afterViewed =
+    getViewedState();
+
+  const internallyViewed =
+    internalAfter?.viewed === true;
+
+  /*
+   * ----------------------------------------------------------
+   * VERIFIED SUCCESS
+   * ----------------------------------------------------------
+   */
+
+  if (
+    afterViewed ||
+    internallyViewed
+  ) {
+    console.log(
+      `✅ [StatusEngine] VERIFIED: Status ${statusId} is now viewed for ${normalized}`
+    );
+
+    return true;
+  }
+
+  /*
+   * ----------------------------------------------------------
+   * NOT VERIFIED
+   * ----------------------------------------------------------
+   */
+
   console.log(
-    `[StatusEngine] FAILED to send Status read request for ${statusId} (${normalized})`
+    `⚠️ [StatusEngine] NOT VERIFIED: Status ${statusId} was not confirmed as viewed for ${normalized}`
+  );
+
+  console.log(
+    `[StatusEngine] Request was sent: ${requestSent}`
+  );
+
+  console.log(
+    `[StatusEngine] Public viewed state: ${afterViewed}`
   );
 
   return false;
