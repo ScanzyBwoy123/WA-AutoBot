@@ -224,10 +224,6 @@ class StatusEngine {
      * The same handler is used so duplicate messages
      * are prevented by processedStatuses.
      */
-    client.on(
-      'message_create',
-      messageHandler
-    );
     /*
      * Store worker.
      */
@@ -358,201 +354,222 @@ class StatusEngine {
    * ==========================================================
    */
   async viewStatus(
-    phone,
-    message = null
-  ) {
-    const normalized =
-      this.normalizePhone(phone);
-    const worker =
-      this.getWorker(normalized);
-    if (!worker) {
-      return false;
-    }
-    const client =
-      worker.client;
-    if (!client) {
-      return false;
-    }
-    /*
-     * --------------------------------------------------------
-     * METHOD 1
-     * --------------------------------------------------------
-     *
-     * Try the message-level sendSeen().
-     *
-     * IMPORTANT:
-     * If this method exists but fails, we continue to the
-     * next method instead of immediately returning false.
-     */
+  phone,
+  message = null
+) {
+  const normalized =
+    this.normalizePhone(phone);
+
+  const worker =
+    this.getWorker(normalized);
+
+  if (!worker) {
+    console.log(
+      `[StatusEngine] Cannot view Status: worker not found for ${normalized}`
+    );
+    return false;
+  }
+
+  const client =
+    worker.client;
+
+  if (!client) {
+    console.log(
+      `[StatusEngine] Cannot view Status: client not available for ${normalized}`
+    );
+    return false;
+  }
+
+  const statusId =
+    this.getStatusId(message);
+
+  if (!statusId) {
+    console.log(
+      `[StatusEngine] Cannot view Status: Status ID is missing for ${normalized}`
+    );
+    return false;
+  }
+
+  console.log(
+    `[StatusEngine] Attempting to view Status ${statusId} for ${normalized}`
+  );
+
+  /*
+   * whatsapp-web.js exposes sendSeen() as a chat-level
+   * operation. We therefore do not claim that the individual
+   * Status was definitely viewed merely because the Promise
+   * resolved.
+   */
+
+  try {
     if (
       message &&
       typeof message.sendSeen === 'function'
     ) {
-      try {
-        await message.sendSeen();
-        console.log(
-          `[StatusEngine] Status viewed using message.sendSeen() for ${normalized}`
-        );
-        return true;
-      } catch (error) {
-        console.log(
-          `[StatusEngine] message.sendSeen() failed for ${normalized}:`,
-          error?.message || error
-        );
-      }
+      await message.sendSeen();
+
+      console.log(
+        `[StatusEngine] Status read request sent for ${statusId} (${normalized})`
+      );
+
+      return true;
     }
-    /*
-     * --------------------------------------------------------
-     * METHOD 2
-     * --------------------------------------------------------
-     *
-     * Try the Status chat.
-     */
-    if (
-      typeof client.getChatById === 'function'
-    ) {
-      try {
-        const statusChat =
-          await client.getChatById(
-            'status@broadcast'
-          );
-        if (
-          statusChat &&
-          typeof statusChat.sendSeen === 'function'
-        ) {
-          await statusChat.sendSeen();
-          console.log(
-            `[StatusEngine] Status viewed using status chat for ${normalized}`
-          );
-          return true;
-        }
-      } catch (error) {
-        console.log(
-          `[StatusEngine] Status chat sendSeen failed for ${normalized}:`,
-          error?.message || error
-        );
-      }
-    }
-    /*
-     * --------------------------------------------------------
-     * METHOD 3
-     * --------------------------------------------------------
-     *
-     * Final client-level fallback.
-     */
+  } catch (error) {
+    console.log(
+      `[StatusEngine] message.sendSeen() failed for ${normalized}:`,
+      error?.message || error
+    );
+  }
+
+  try {
     if (
       typeof client.sendSeen === 'function'
     ) {
-      try {
-        await client.sendSeen(
-          'status@broadcast'
-        );
-        console.log(
-          `[StatusEngine] Status viewed using client.sendSeen() for ${normalized}`
-        );
-        return true;
-      } catch (error) {
-        console.log(
-          `[StatusEngine] client.sendSeen() failed for ${normalized}:`,
-          error?.message || error
-        );
-      }
+      await client.sendSeen(
+        'status@broadcast'
+      );
+
+      console.log(
+        `[StatusEngine] Status chat read request sent for ${statusId} (${normalized})`
+      );
+
+      return true;
     }
+  } catch (error) {
     console.log(
-      `[StatusEngine] No supported Status-view method succeeded for ${normalized}`
+      `[StatusEngine] client.sendSeen() failed for ${normalized}:`,
+      error?.message || error
     );
-    return false;
   }
+
+  console.log(
+    `[StatusEngine] FAILED to send Status read request for ${statusId} (${normalized})`
+  );
+
+  return false;
+}
   /*
    * ==========================================================
    * REACT TO STATUS
    * ==========================================================
    */
   async reactToStatus(
-    phone,
-    message,
-    emoji = '❤️'
-  ) {
-    const normalized =
-      this.normalizePhone(phone);
-    const worker =
-      this.getWorker(normalized);
-    if (!worker) {
-      return false;
-    }
-    if (!message) {
-      return false;
-    }
-    const reaction =
-      String(
-        emoji ||
-        worker.emoji ||
-        '❤️'
-      ).trim();
-    if (!reaction) {
-      return false;
-    }
-    /*
-     * --------------------------------------------------------
-     * METHOD 1
-     * --------------------------------------------------------
-     *
-     * Try whatsapp-web.js message.react().
-     */
-    if (
-      typeof message.react === 'function'
-    ) {
-      try {
-        await message.react(
-          reaction
-        );
-        console.log(
-          `[StatusEngine] Status reacted with ${reaction} for ${normalized}`
-        );
-        return true;
-      } catch (error) {
-        console.log(
-          `[StatusEngine] message.react() failed for ${normalized}:`,
-          error?.message || error
-        );
-      }
-    }
-    /*
-     * --------------------------------------------------------
-     * METHOD 2
-     * --------------------------------------------------------
-     *
-     * Try client-level reaction if available.
-     */
-    if (
-      worker.client &&
-      typeof worker.client.react === 'function'
-    ) {
-      const statusId =
-        this.getStatusId(message);
-      if (statusId) {
-        try {
-          await worker.client.react(
-            statusId,
-            reaction
-          );
-          console.log(
-            `[StatusEngine] Status reacted through client with ${reaction} for ${normalized}`
-          );
-          return true;
-        } catch (error) {
-          console.log(
-            `[StatusEngine] client.react() failed for ${normalized}:`,
-            error?.message || error
-          );
-        }
-      }
-    }
+  phone,
+  message,
+  emoji = '❤️'
+) {
+  const normalized =
+    this.normalizePhone(phone);
+
+  const worker =
+    this.getWorker(normalized);
+
+  if (!worker) {
     console.log(
-      `[StatusEngine] No supported Status reaction method succeeded for ${normalized}`
+      `[StatusEngine] Cannot react: worker not found for ${normalized}`
     );
     return false;
   }
+
+  if (!message) {
+    console.log(
+      `[StatusEngine] Cannot react: Status message is missing for ${normalized}`
+    );
+    return false;
+  }
+
+  const statusId =
+    this.getStatusId(message);
+
+  if (!statusId) {
+    console.log(
+      `[StatusEngine] Cannot react: Status ID is missing for ${normalized}`
+    );
+    return false;
+  }
+
+  const reaction =
+    String(
+      emoji ||
+      worker.emoji ||
+      '❤️'
+    ).trim();
+
+  if (!reaction) {
+    console.log(
+      `[StatusEngine] Cannot react: reaction emoji is empty for ${normalized}`
+    );
+    return false;
+  }
+
+  console.log(
+    `[StatusEngine] Attempting reaction ${reaction} on Status ${statusId} for ${normalized}`
+  );
+
+  /*
+   * Prefer the actual whatsapp-web.js client method.
+   */
+  if (
+    worker.client &&
+    typeof worker.client.sendReaction === 'function'
+  ) {
+    try {
+      await worker.client.sendReaction(
+        statusId,
+        reaction
+      );
+
+      console.log(
+        `[StatusEngine] Reaction request sent for Status ${statusId}: ${reaction}`
+      );
+
+      /*
+       * sendReaction() does not return a reliable boolean
+       * success value, so do not pretend that this proves
+       * WhatsApp accepted the reaction.
+       */
+      return true;
+
+    } catch (error) {
+      console.log(
+        `[StatusEngine] client.sendReaction() failed for ${normalized}:`,
+        error?.message || error
+      );
+    }
+  }
+
+  /*
+   * Fallback to Message.react() if the client-level method
+   * is unavailable.
+   */
+  if (
+    typeof message.react === 'function'
+  ) {
+    try {
+      await message.react(
+        reaction
+      );
+
+      console.log(
+        `[StatusEngine] Message reaction request sent for Status ${statusId}: ${reaction}`
+      );
+
+      return true;
+
+    } catch (error) {
+      console.log(
+        `[StatusEngine] message.react() failed for ${normalized}:`,
+        error?.message || error
+      );
+    }
+  }
+
+  console.log(
+    `[StatusEngine] FAILED to send reaction for Status ${statusId} (${normalized})`
+  );
+
+  return false;
+}
   /*
    * ==========================================================
    * MANUAL STATUS PROCESSING
