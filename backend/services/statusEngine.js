@@ -353,313 +353,252 @@ class StatusEngine {
    * VIEW STATUS
    * ==========================================================
    */
-  async viewStatus(
-  phone,
-  message = null
-) {
-  const normalized =
-    this.normalizePhone(phone);
+async viewStatus(phone, message = null) {
+  const normalized = this.normalizePhone(phone);
+  const worker = this.getWorker(normalized);
 
-  const worker =
-    this.getWorker(normalized);
-
-  if (!worker) {
+  if (!worker || !worker.client) {
     console.log(
-      `[StatusEngine] Cannot view Status: worker not found for ${normalized}`
+      `[StatusEngine] Cannot view Status: worker/client unavailable for ${normalized}`
     );
     return false;
   }
 
-  const client =
-    worker.client;
-
-  if (!client) {
-    console.log(
-      `[StatusEngine] Cannot view Status: client not available for ${normalized}`
-    );
-    return false;
-  }
+  const client = worker.client;
 
   const statusId =
-    this.getStatusId(message);
+    message?.id?._serialized ||
+    message?._data?.id?._serialized ||
+    null;
 
-  if (!statusId) {
+  const participant =
+    message?.author ||
+    message?._data?.author ||
+    message?._data?.id?.participant ||
+    message?.id?.participant ||
+    null;
+
+  console.log(
+    `[StatusEngine] Status view target: ${JSON.stringify({
+      statusId,
+      participant
+    })}`
+  );
+
+  if (!participant) {
     console.log(
-      `[StatusEngine] Cannot view Status: Status ID is missing for ${normalized}`
+      `[StatusEngine] Cannot resolve Status owner for ${statusId}`
     );
     return false;
   }
 
-  console.log(
-    `[StatusEngine] Attempting VERIFIED view of Status ${statusId} for ${normalized}`
-  );
-
   /*
-   * ----------------------------------------------------------
-   * READ THE ACTUAL STATUS MODEL
-   * ----------------------------------------------------------
-   *
-   * WhatsApp Status messages expose a "viewed" property.
-   * We inspect it before and after the read operation.
-   *
-   * This prevents us from reporting success merely because
-   * sendSeen() returned without throwing.
+   * WhatsApp Web stores Statuses in the Status collection.
+   * whatsapp-web.js itself uses this collection through
+   * getBroadcastById().
    */
-
-  const getViewedState = () => {
-    return (
-      message?.viewed === true ||
-      message?._data?.viewed === true
-    );
-  };
-
-  const beforeViewed =
-    getViewedState();
-
-  console.log(
-    `[StatusEngine] Status ${statusId} viewed BEFORE request: ${beforeViewed}`
-  );
-
-  /*
-   * ----------------------------------------------------------
-   * INTERNAL WHATSAPP MODEL DIAGNOSTIC
-   * ----------------------------------------------------------
-   *
-   * whatsapp-web.js exposes pupPage and WWebJS internally.
-   * We use this only to inspect the actual Status model.
-   */
-
-  let internalBefore = null;
 
   try {
-    if (
-      client.pupPage &&
-      typeof client.pupPage.evaluate === 'function'
-    ) {
-      internalBefore =
-        await client.pupPage.evaluate(
-          async msgId => {
-            try {
-              const collections =
-                window.require?.(
-                  'WAWebCollections'
-                );
+    const broadcast =
+      await client.getBroadcastById(participant);
 
-              if (!collections?.Msg) {
-                return {
-                  available: false,
-                  reason: 'WAWebCollections.Msg unavailable'
-                };
-              }
+    if (!broadcast) {
+      console.log(
+        `[StatusEngine] No Broadcast found for ${participant}`
+      );
+      return false;
+    }
 
-              const msg =
-                collections.Msg.get(msgId) ||
-                (
-                  await collections.Msg
-                    .getMessagesById([msgId])
-                )?.messages?.[0];
+    const statuses =
+      Array.isArray(broadcast.msgs)
+        ? broadcast.msgs
+        : [];
 
-              if (!msg) {
-                return {
-                  available: true,
-                  found: false
-                };
-              }
+    console.log(
+      `[StatusEngine] Broadcast resolved: ${participant} | total=${broadcast.totalCount} | unread=${broadcast.unreadCount} | messages=${statuses.length}`
+    );
 
-              return {
-                available: true,
-                found: true,
-                viewed:
-                  msg.viewed === true,
-                isStatus:
-                  msg.isStatus === true ||
-                  msg.isStatusV3 === true,
-                remote:
-                  msg.id?.remote?._serialized ||
-                  msg.id?.remote ||
-                  null
-              };
-            } catch (error) {
-              return {
-                available: false,
-                error:
-                  error?.message ||
-                  String(error)
-              };
-            }
-          },
-          statusId
+    if (!statuses.length) {
+      console.log(
+        `[StatusEngine] Broadcast contains no Status messages for ${participant}`
+      );
+      return false;
+    }
+
+    /*
+     * Find the exact Status message that triggered the worker.
+     */
+
+    let target = statuses.find(status => {
+      const id =
+        status?.id?._serialized ||
+        status?._data?.id?._serialized ||
+        null;
+
+      return id === statusId;
+    });
+
+    /*
+     * If the exact serialized ID is not present, use the
+     * Status ID portion as a fallback.
+     */
+
+    if (!target && statusId) {
+      const rawId =
+        message?.id?.id ||
+        message?._data?.id?.id ||
+        null;
+
+      if (rawId) {
+        target = statuses.find(status => {
+          const id =
+            status?.id?.id ||
+            status?._data?.id?.id ||
+            null;
+
+          return id === rawId;
+        });
+      }
+    }
+
+    /*
+     * Last fallback: use the message supplied by the
+     * Status event itself.
+     */
+
+    if (!target) {
+      target = message;
+    }
+
+    if (!target) {
+      console.log(
+        `[StatusEngine] Target Status message could not be resolved`
+      );
+      return false;
+    }
+
+    const targetId =
+      target?.id?._serialized ||
+      target?._data?.id?._serialized ||
+      statusId;
+
+    const beforeViewed =
+      target?.viewed === true ||
+      target?._data?.viewed === true;
+
+    console.log(
+      `[StatusEngine] Target Status ${targetId} viewed BEFORE: ${beforeViewed}`
+    );
+
+    /*
+     * Try the normal whatsapp-web.js Status message
+     * operation first.
+     */
+
+    let requestSent = false;
+
+    if (typeof target.sendSeen === 'function') {
+      try {
+        await target.sendSeen();
+
+        requestSent = true;
+
+        console.log(
+          `[StatusEngine] sendSeen() completed for ${targetId}`
         );
-
-      console.log(
-        '[StatusEngine] Internal Status state BEFORE:',
-        JSON.stringify(internalBefore)
-      );
-    }
-  } catch (error) {
-    console.log(
-      `[StatusEngine] Internal Status inspection failed:`,
-      error?.message || error
-    );
-  }
-
-  /*
-   * ----------------------------------------------------------
-   * CURRENT PUBLIC API ATTEMPT
-   * ----------------------------------------------------------
-   *
-   * Keep the existing operation, but DO NOT consider it
-   * successful yet.
-   */
-
-  let requestSent = false;
-
-  try {
-    if (
-      message &&
-      typeof message.sendSeen === 'function'
-    ) {
-      await message.sendSeen();
-
-      requestSent = true;
-
-      console.log(
-        `[StatusEngine] message.sendSeen() completed for ${statusId}`
-      );
-    }
-  } catch (error) {
-    console.log(
-      `[StatusEngine] message.sendSeen() failed:`,
-      error?.message || error
-    );
-  }
-
-  /*
-   * Give WhatsApp Web a moment to update its message model.
-   */
-
-  await new Promise(resolve =>
-    setTimeout(resolve, 1500)
-  );
-
-  /*
-   * ----------------------------------------------------------
-   * CHECK THE STATUS AGAIN
-   * ----------------------------------------------------------
-   */
-
-  let internalAfter = null;
-
-  try {
-    if (
-      client.pupPage &&
-      typeof client.pupPage.evaluate === 'function'
-    ) {
-      internalAfter =
-        await client.pupPage.evaluate(
-          async msgId => {
-            try {
-              const collections =
-                window.require?.(
-                  'WAWebCollections'
-                );
-
-              if (!collections?.Msg) {
-                return {
-                  available: false,
-                  reason: 'WAWebCollections.Msg unavailable'
-                };
-              }
-
-              const msg =
-                collections.Msg.get(msgId) ||
-                (
-                  await collections.Msg
-                    .getMessagesById([msgId])
-                )?.messages?.[0];
-
-              if (!msg) {
-                return {
-                  available: true,
-                  found: false
-                };
-              }
-
-              return {
-                available: true,
-                found: true,
-                viewed:
-                  msg.viewed === true,
-                isStatus:
-                  msg.isStatus === true ||
-                  msg.isStatusV3 === true
-              };
-            } catch (error) {
-              return {
-                available: false,
-                error:
-                  error?.message ||
-                  String(error)
-              };
-            }
-          },
-          statusId
+      } catch (error) {
+        console.log(
+          `[StatusEngine] sendSeen() failed: ${error?.message || error}`
         );
+      }
+    }
 
+    /*
+     * Wait for WhatsApp Web to update the Status model.
+     */
+
+    await new Promise(resolve =>
+      setTimeout(resolve, 1500)
+    );
+
+    /*
+     * Reload the Status message from the Broadcast
+     * instead of using WAWebCollections.Msg.
+     */
+
+    let refreshedBroadcast = null;
+
+    try {
+      refreshedBroadcast =
+        await client.getBroadcastById(participant);
+    } catch (error) {
       console.log(
-        '[StatusEngine] Internal Status state AFTER:',
-        JSON.stringify(internalAfter)
+        `[StatusEngine] Broadcast refresh failed: ${error?.message || error}`
       );
     }
-  } catch (error) {
+
+    let refreshed = null;
+
+    if (refreshedBroadcast?.msgs?.length) {
+      refreshed =
+        refreshedBroadcast.msgs.find(status => {
+          const id =
+            status?.id?._serialized ||
+            status?._data?.id?._serialized ||
+            null;
+
+          return id === targetId;
+        });
+    }
+
+    const afterViewed =
+      refreshed?.viewed === true ||
+      refreshed?._data?.viewed === true ||
+      target?.viewed === true ||
+      target?._data?.viewed === true;
+
+    const unreadAfter =
+      refreshedBroadcast?.unreadCount;
+
     console.log(
-      `[StatusEngine] Internal Status verification failed:`,
+      `[StatusEngine] Target Status ${targetId} viewed AFTER: ${afterViewed}`
+    );
+
+    console.log(
+      `[StatusEngine] Broadcast unread count AFTER: ${unreadAfter}`
+    );
+
+    /*
+     * Only report success when WhatsApp actually confirms
+     * that the Status is viewed.
+     */
+
+    if (afterViewed) {
+      console.log(
+        `✅ [StatusEngine] VERIFIED VIEW: ${targetId} for ${normalized}`
+      );
+
+      return true;
+    }
+
+    console.log(
+      `⚠️ [StatusEngine] NOT VERIFIED: ${targetId} was not marked viewed`
+    );
+
+    console.log(
+      `[StatusEngine] Request sent: ${requestSent}`
+    );
+
+    return false;
+
+  } catch (error) {
+    console.error(
+      `[StatusEngine] Status view error for ${normalized}:`,
       error?.message || error
     );
+
+    return false;
   }
-
-  const afterViewed =
-    getViewedState();
-
-  const internallyViewed =
-    internalAfter?.viewed === true;
-
-  /*
-   * ----------------------------------------------------------
-   * VERIFIED SUCCESS
-   * ----------------------------------------------------------
-   */
-
-  if (
-    afterViewed ||
-    internallyViewed
-  ) {
-    console.log(
-      `✅ [StatusEngine] VERIFIED: Status ${statusId} is now viewed for ${normalized}`
-    );
-
-    return true;
-  }
-
-  /*
-   * ----------------------------------------------------------
-   * NOT VERIFIED
-   * ----------------------------------------------------------
-   */
-
-  console.log(
-    `⚠️ [StatusEngine] NOT VERIFIED: Status ${statusId} was not confirmed as viewed for ${normalized}`
-  );
-
-  console.log(
-    `[StatusEngine] Request was sent: ${requestSent}`
-  );
-
-  console.log(
-    `[StatusEngine] Public viewed state: ${afterViewed}`
-  );
-
-  return false;
 }
   /*
    * ==========================================================
