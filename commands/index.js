@@ -143,11 +143,11 @@ async function callService(
   args = []
 ) {
   const objects = [
-  context?.service,
-  context?.statusEngine,
-  context?.multiAccountService,
-  context?.accountService
-].filter(Boolean);
+    context?.service,
+    context?.statusEngine,
+    context?.multiAccountService,
+    context?.accountService
+  ].filter(Boolean);
 
   for (const object of objects) {
     for (const method of methods) {
@@ -305,85 +305,98 @@ async function statusCommand(context) {
     );
   }
 }
+
+/*
+|--------------------------------------------------------------------------
+| AUTO VIEW
+|--------------------------------------------------------------------------
+*/
+
 async function autoViewCommand(
   context,
-  args
+  args = []
 ) {
-  const action =
-    String(
-      args?.[0] || ''
-    ).toLowerCase();
   const phone =
-    context?.phone;
+    String(
+      context?.phone || ''
+    ).replace(/\D/g, '');
+
   const service =
     context?.service;
-  const multiAccountService =
+
+  const accountService =
     context?.multiAccountService ||
     context?.accountService;
-  /*
-   * --------------------------------------------------------
-   * CHECK PHONE
-   * --------------------------------------------------------
-   */
+
+  const action =
+    String(
+      args?.[0] || 'status'
+    ).toLowerCase();
+
   if (!phone) {
     return (
       '❌ Auto View error: ' +
       'Account phone number is missing.'
     );
   }
-  /*
-   * --------------------------------------------------------
-   * SUPPORT OLD + NEW COMMAND STYLES
-   * --------------------------------------------------------
-   *
-   * .autoview on
-   * .autoview enable
-   * .autoview start
-   *
-   * .autoview off
-   * .autoview disable
-   * .autoview stop
-   */
+
+  if (!accountService) {
+    return (
+      '❌ Auto View error: ' +
+      'Multi-account service is unavailable.'
+    );
+  }
+
   const normalizedAction =
-    action === 'start'
+    [
+      'start',
+      'enable',
+      'enabled'
+    ].includes(action)
       ? 'on'
-      : action === 'stop'
+      : [
+          'stop',
+          'disable',
+          'disabled'
+        ].includes(action)
         ? 'off'
         : action;
+
   /*
    * --------------------------------------------------------
    * STATUS
    * --------------------------------------------------------
    */
+
   if (
-    normalizedAction === 'status'
+    normalizedAction === 'status' ||
+    normalizedAction === ''
   ) {
     try {
-      let account = null;
-      if (
-        typeof multiAccountService?.getAccount ===
+      const account =
+        typeof accountService.getAccount ===
         'function'
-      ) {
-        account =
-          multiAccountService.getAccount(
-            phone
-          );
-      }
-      let workerStatus = null;
-      if (
-        typeof service?.getStatus ===
+          ? accountService.getAccount(
+              phone
+            )
+          : null;
+
+      const worker =
+        typeof service?.getStatusAutomation ===
         'function'
-      ) {
-        workerStatus =
-          service.getStatus(phone);
-      }
+          ? service.getStatusAutomation(
+              phone
+            )
+          : typeof service?.getStatus ===
+              'function'
+            ? service.getStatus(phone)
+            : null;
+
       const accountEnabled =
+        account?.autoView === true ||
         account?.autoViewStatus === true ||
         account?.statusView === true;
-      const workerRunning =
-        workerStatus?.running === true;
-      const workerAutoView =
-        workerStatus?.autoView === true;
+
       return (
         '👁️ *AUTO VIEW STATUS*\n\n' +
         `Account setting: ${
@@ -392,16 +405,17 @@ async function autoViewCommand(
             : 'OFF 🛑'
         }\n` +
         `Status worker: ${
-          workerRunning
+          worker?.running === true
             ? 'RUNNING ✅'
             : 'STOPPED 🛑'
         }\n` +
         `Auto View engine: ${
-          workerAutoView
+          worker?.autoView === true
             ? 'ACTIVE ✅'
             : 'INACTIVE 🛑'
         }`
       );
+
     } catch (error) {
       return (
         `❌ Auto View status error: ${
@@ -411,17 +425,17 @@ async function autoViewCommand(
       );
     }
   }
+
   /*
    * --------------------------------------------------------
    * VALIDATE ACTION
    * --------------------------------------------------------
    */
+
   if (
     ![
       'on',
-      'off',
-      'enable',
-      'disable'
+      'off'
     ].includes(
       normalizedAction
     )
@@ -436,110 +450,87 @@ async function autoViewCommand(
       '• *.autoview status*'
     );
   }
+
   const enabled =
-    normalizedAction === 'on' ||
-    normalizedAction === 'enable';
+    normalizedAction === 'on';
+
   /*
    * --------------------------------------------------------
-   * MAKE SURE THE SERVICE EXISTS
+   * SAVE + START
    * --------------------------------------------------------
    */
-  if (!multiAccountService) {
-    return (
-      '❌ Auto View error: ' +
-      'Multi-account service is unavailable.'
-    );
-  }
+
   try {
-    /*
-     * ------------------------------------------------------
-     * GET ACCOUNT
-     * ------------------------------------------------------
-     */
-    let account = null;
-    if (
-      typeof multiAccountService.getAccount ===
+    const account =
+      typeof accountService.getAccount ===
       'function'
-    ) {
-      account =
-        multiAccountService.getAccount(
-          phone
-        );
-    }
+        ? accountService.getAccount(
+            phone
+          )
+        : null;
+
     if (!account) {
       return (
         '❌ Auto View error: ' +
         'Account not found.'
       );
     }
-    /*
-     * ------------------------------------------------------
-     * SAVE THE SETTING
-     * ------------------------------------------------------
-     *
-     * Prefer the official service method if available.
-     */
-    let settingChanged = false;
+
+    let saved = false;
+
     if (
-      typeof multiAccountService.setAutoViewStatus ===
+      typeof accountService.setAutoViewStatus ===
       'function'
     ) {
-      settingChanged =
-        await multiAccountService.setAutoViewStatus(
+      saved =
+        await accountService.setAutoViewStatus(
           phone,
           enabled
         );
     } else {
-      /*
-       * Fallback for compatibility with older versions.
-       */
       account.autoViewStatus =
         enabled;
+
       account.updatedAt =
         new Date().toISOString();
+
       if (
-        typeof multiAccountService.saveAccounts ===
+        typeof accountService.saveAccounts ===
         'function'
       ) {
-        await multiAccountService.saveAccounts();
+        await accountService.saveAccounts();
       }
-      settingChanged = true;
+
+      saved = true;
     }
-    if (!settingChanged) {
+
+    if (!saved) {
       return (
         '❌ Auto View setting could not be changed.'
       );
     }
-    /*
-     * ------------------------------------------------------
-     * REFRESH ACCOUNT DATA
-     * ------------------------------------------------------
-     */
+
+    const refreshedAccount =
+      typeof accountService.getAccount ===
+      'function'
+        ? accountService.getAccount(
+            phone
+          )
+        : account;
+
     if (
-      typeof multiAccountService.getAccount ===
+      typeof service?.startStatusMonitor ===
       'function'
     ) {
-      account =
-        multiAccountService.getAccount(
-          phone
-        );
-    }
-    /*
-     * ------------------------------------------------------
-     * START / RESTART STATUS ENGINE
-     * ------------------------------------------------------
-     *
-     * THIS IS THE IMPORTANT FIX.
-     *
-     * Changing autoViewStatus in accounts.json does not
-     * automatically change the already-running StatusEngine.
-     */
-    if (typeof service?.startStatusMonitor === 'function') {
-      const monitorStarted =
+      const started =
         await service.startStatusMonitor(
           phone
         );
-      if (enabled && !monitorStarted) {
+
+      if (
+        enabled &&
+        started === false
+      ) {
         return (
           '⚠️ Auto View setting was saved, ' +
           'but the Status monitor could not be started.\n\n' +
@@ -547,17 +538,16 @@ async function autoViewCommand(
         );
       }
     }
-    /*
-     * ------------------------------------------------------
-     * STOP ENGINE WHEN BOTH AUTOMATIONS ARE OFF
-     * ------------------------------------------------------
-     */
+
     if (!enabled) {
       const autoLike =
-        account?.autoLike === true;
+        refreshedAccount?.autoLike === true;
+
       const autoView =
-        account?.autoViewStatus === true ||
-        account?.statusView === true;
+        refreshedAccount?.autoViewStatus === true ||
+        refreshedAccount?.autoView === true ||
+        refreshedAccount?.statusView === true;
+
       if (
         !autoView &&
         !autoLike &&
@@ -569,48 +559,23 @@ async function autoViewCommand(
         );
       }
     }
-    /*
-     * ------------------------------------------------------
-     * CONFIRM ACTUAL ENGINE STATE
-     * ------------------------------------------------------
-     */
-    let workerStatus = null;
-    if (
-      typeof service?.getStatus ===
-      'function'
-    ) {
-      workerStatus =
-        service.getStatus(phone);
-    }
-    if (enabled) {
-      if (
-        workerStatus &&
-        workerStatus.autoView === true
-      ) {
-        return (
-          '✅ Auto View enabled.\n\n' +
-          '👁️ Status monitor is running and ' +
-          'ready to process new WhatsApp Status messages.'
+
+    return enabled
+      ? (
+          '✅ *Auto View enabled!*\n\n' +
+          '👀 New WhatsApp statuses will be viewed automatically.'
+        )
+      : (
+          '🛑 *Auto View disabled.*\n\n' +
+          'Automatic Status viewing has been stopped.'
         );
-      }
-      /*
-       * Setting was saved but engine state could not
-       * be confirmed.
-       */
-      return (
-        '⚠️ Auto View setting was saved, ' +
-        'but the Status engine is not currently reporting Auto View as active.'
-      );
-    }
-    return (
-      '🛑 Auto View disabled.\n\n' +
-      'The Status engine has been updated.'
-    );
+
   } catch (error) {
     console.error(
       '[AutoView] Error:',
       error
     );
+
     return (
       `❌ Auto View error: ${
         error?.message ||
@@ -621,19 +586,18 @@ async function autoViewCommand(
 }
 /*
 |--------------------------------------------------------------------------
-| AUTO VIEW
-|--------------------------------------------------------------------------
-*/
-
-/*
-|--------------------------------------------------------------------------
 | AUTO LIKE
 |--------------------------------------------------------------------------
 */
-async function autoLikeCommand(context, args = []) {
-  const phone = String(
-    context?.phone || ''
-  ).replace(/\D/g, '');
+
+async function autoLikeCommand(
+  context,
+  args = []
+) {
+  const phone =
+    String(
+      context?.phone || ''
+    ).replace(/\D/g, '');
 
   const service =
     context?.service;
@@ -643,67 +607,92 @@ async function autoLikeCommand(context, args = []) {
     context?.accountService;
 
   if (!phone) {
-    return '❌ Could not identify the WhatsApp account.';
+    return (
+      '❌ Could not identify the WhatsApp account.'
+    );
   }
 
   if (!accountService) {
-    return '❌ Account service is unavailable.';
+    return (
+      '❌ Account service is unavailable.'
+    );
   }
 
-  const action = String(
-    args?.[0] || 'status'
-  ).toLowerCase();
+  const action =
+    String(
+      args?.[0] || 'status'
+    ).toLowerCase();
 
   /*
-   * ========================================================
+   * --------------------------------------------------------
    * STATUS
-   * ========================================================
+   * --------------------------------------------------------
    */
 
   if (
     action === 'status' ||
     action === ''
   ) {
-    const account =
-      typeof accountService.getAccount === 'function'
-        ? accountService.getAccount(phone)
-        : null;
+    try {
+      const account =
+        typeof accountService.getAccount ===
+        'function'
+          ? accountService.getAccount(
+              phone
+            )
+          : null;
 
-    const worker =
-      typeof service?.getStatusAutomation === 'function'
-        ? service.getStatusAutomation(phone)
-        : null;
+      const worker =
+        typeof service?.getStatusAutomation ===
+        'function'
+          ? service.getStatusAutomation(
+              phone
+            )
+          : typeof service?.getStatus ===
+              'function'
+            ? service.getStatus(phone)
+            : null;
 
-    return (
-      '❤️ *AUTO LIKE STATUS*\n\n' +
-      `Account setting: ${
-        account?.autoLike === true
-          ? 'ON ✅'
-          : 'OFF 🛑'
-      }\n` +
-      `Status worker: ${
-        worker?.running === true
-          ? 'RUNNING ✅'
-          : 'STOPPED 🛑'
-      }\n` +
-      `Auto Like engine: ${
-        worker?.autoLike === true
-          ? 'ACTIVE ✅'
-          : 'INACTIVE 🛑'
-      }\n` +
-      `Reaction: ${
-        account?.reaction ||
-        account?.autoLikeReaction ||
-        worker?.emoji ||
-        '❤️'
-      }`
-    );
+      return (
+        '❤️ *AUTO LIKE STATUS*\n\n' +
+        `Account setting: ${
+          account?.autoLike === true
+            ? 'ON ✅'
+            : 'OFF 🛑'
+        }\n` +
+        `Status worker: ${
+          worker?.running === true
+            ? 'RUNNING ✅'
+            : 'STOPPED 🛑'
+        }\n` +
+        `Auto Like engine: ${
+          worker?.autoLike === true
+            ? 'ACTIVE ✅'
+            : 'INACTIVE 🛑'
+        }\n` +
+        `Reaction: ${
+          account?.reaction ||
+          account?.autoLikeReaction ||
+          account?.reactionEmoji ||
+          worker?.emoji ||
+          '❤️'
+        }`
+      );
+
+    } catch (error) {
+      return (
+        `❌ Auto Like status error: ${
+          error?.message ||
+          'Unknown error'
+        }`
+      );
+    }
   }
 
   /*
-   * ========================================================
+   * --------------------------------------------------------
    * ENABLE
-   * ========================================================
+   * --------------------------------------------------------
    */
 
   if (
@@ -716,54 +705,76 @@ async function autoLikeCommand(context, args = []) {
       typeof accountService.setAutoLike !==
       'function'
     ) {
-      return '❌ Auto Like account setting is unavailable.';
-    }
-
-    const saved =
-      accountService.setAutoLike(
-        phone,
-        true
-      );
-
-    if (!saved) {
       return (
-        '❌ Could not enable Auto Like.\n' +
-        'Make sure the account is active.'
+        '❌ Auto Like account setting is unavailable.'
       );
     }
 
-    /*
-     * Restart Status worker with the new settings.
-     */
-    if (
-      typeof service?.startStatusMonitor ===
-      'function'
-    ) {
-      const started =
-        service.startStatusMonitor(phone);
+    try {
+      const saved =
+        await accountService.setAutoLike(
+          phone,
+          true
+        );
 
-      if (!started) {
+      if (!saved) {
         return (
-          '⚠️ Auto Like was saved, but the Status worker could not start.\n' +
-          'Make sure WhatsApp is connected and READY.'
+          '❌ Could not enable Auto Like.\n' +
+          'Make sure the account is active.'
         );
       }
+
+      /*
+       * Start/restart the Status worker so
+       * the new Auto Like setting is applied.
+       */
+
+      if (
+        typeof service?.startStatusMonitor ===
+        'function'
+      ) {
+        const started =
+          await service.startStatusMonitor(
+            phone
+          );
+
+        if (started === false) {
+          return (
+            '⚠️ Auto Like was saved, ' +
+            'but the Status worker could not start.\n\n' +
+            'Make sure WhatsApp is connected and READY.'
+          );
+        }
+      }
+
+      console.log(
+        `[AutoLike] ENABLED for ${phone}`
+      );
+
+      return (
+        '✅ *Auto Like enabled!*\n\n' +
+        '❤️ New WhatsApp statuses will be reacted to automatically.'
+      );
+
+    } catch (error) {
+      console.error(
+        '[AutoLike] Enable error:',
+        error
+      );
+
+      return (
+        `❌ Could not enable Auto Like: ${
+          error?.message ||
+          'Unknown error'
+        }`
+      );
     }
-
-    console.log(
-      `[AutoLike] ENABLED for ${phone}`
-    );
-
-    return (
-      '✅ *Auto Like enabled!*\n\n' +
-      '❤️ New WhatsApp statuses will be reacted to automatically.'
-    );
   }
 
   /*
-   * ========================================================
+   * --------------------------------------------------------
    * DISABLE
-   * ========================================================
+   * --------------------------------------------------------
    */
 
   if (
@@ -776,41 +787,67 @@ async function autoLikeCommand(context, args = []) {
       typeof accountService.setAutoLike !==
       'function'
     ) {
-      return '❌ Auto Like account setting is unavailable.';
-    }
-
-    const saved =
-      accountService.setAutoLike(
-        phone,
-        false
-      );
-
-    if (!saved) {
-      return '❌ Could not disable Auto Like.';
-    }
-
-    /*
-     * Restart/stop Status worker so the new
-     * configuration takes effect immediately.
-     */
-    if (
-      typeof service?.startStatusMonitor ===
-      'function'
-    ) {
-      service.startStatusMonitor(
-        phone
+      return (
+        '❌ Auto Like account setting is unavailable.'
       );
     }
 
-    console.log(
-      `[AutoLike] DISABLED for ${phone}`
-    );
+    try {
+      const saved =
+        await accountService.setAutoLike(
+          phone,
+          false
+        );
 
-    return (
-      '✅ *Auto Like disabled.*\n\n' +
-      'Automatic Status reactions have been stopped.'
-    );
+      if (!saved) {
+        return (
+          '❌ Could not disable Auto Like.'
+        );
+      }
+
+      /*
+       * Restart the monitor so it reloads
+       * the latest account configuration.
+       */
+
+      if (
+        typeof service?.startStatusMonitor ===
+        'function'
+      ) {
+        await service.startStatusMonitor(
+          phone
+        );
+      }
+
+      console.log(
+        `[AutoLike] DISABLED for ${phone}`
+      );
+
+      return (
+        '✅ *Auto Like disabled.*\n\n' +
+        'Automatic Status reactions have been stopped.'
+      );
+
+    } catch (error) {
+      console.error(
+        '[AutoLike] Disable error:',
+        error
+      );
+
+      return (
+        `❌ Could not disable Auto Like: ${
+          error?.message ||
+          'Unknown error'
+        }`
+      );
+    }
   }
+
+  /*
+   * --------------------------------------------------------
+   * INVALID ACTION
+   * --------------------------------------------------------
+   */
 
   return (
     '❌ Invalid command.\n\n' +
@@ -819,121 +856,287 @@ async function autoLikeCommand(context, args = []) {
     '`.autolike off`\n' +
     '`.autolike status`'
   );
-}yu 
-
-  const enabled =
-    normalizedAction === 'on' ||
-    normalizedAction === 'enable';
-
-  try {
-    if (!multiAccountService) {
-      return (
-        '❌ Auto Like error: ' +
-        'Multi-account service is unavailable.'
-      );
-    }
-
-    const account =
-      typeof multiAccountService.getAccount === 'function'
-        ? multiAccountService.getAccount(phone)
-        : null;
-
-    if (!account) {
-      return '❌ Auto Like error: Account not found.';
-    }
-
-    account.autoLike = enabled;
-    account.updatedAt =
-      new Date().toISOString();
-
-    if (
-      typeof multiAccountService.saveAccounts ===
-      'function'
-    ) {
-      await multiAccountService.saveAccounts();
-    }
-
-    if (
-      typeof service?.startStatusMonitor ===
-      'function'
-    ) {
-      await service.startStatusMonitor(phone);
-    }
-
-    if (!enabled) {
-      const autoView =
-        account.autoViewStatus === true ||
-        account.statusView === true;
-
-      if (
-        !autoView &&
-        typeof service?.stopStatusMonitor ===
-        'function'
-      ) {
-        await service.stopStatusMonitor(phone);
-      }
-    }
-
-    return enabled
-      ? '❤️ Auto Like enabled. New WhatsApp Status messages will now be reacted to automatically.'
-      : '🛑 Auto Like disabled.';
-
-  } catch (error) {
-    console.error(
-      '[AutoLike] Error:',
-      error
-    );
-
-    return (
-      `❌ Auto Like error: ${
-        error?.message || 'Unknown error'
-      }`
-    );
-  }
 }
-
 
 /*
 |--------------------------------------------------------------------------
-| REACTION
+| REACTION COMMAND
 |--------------------------------------------------------------------------
 */
 
 async function reactionCommand(
   context,
-  args
+  args = []
 ) {
-  const reaction =
+  const phone =
+    String(
+      context?.phone || ''
+    ).replace(/\D/g, '');
+
+  const service =
+    context?.service;
+
+  const accountService =
+    context?.multiAccountService ||
+    context?.accountService;
+
+  const emoji =
     String(
       args?.[0] || ''
     ).trim();
 
-  if (!reaction) {
+  if (!phone) {
+    return (
+      '❌ Could not identify the WhatsApp account.'
+    );
+  }
+
+  if (!accountService) {
+    return (
+      '❌ Account service is unavailable.'
+    );
+  }
+
+  /*
+   * No emoji = show current reaction.
+   */
+
+  if (!emoji) {
+    let account = null;
+
+    if (
+      typeof accountService.getAccount ===
+      'function'
+    ) {
+      account =
+        accountService.getAccount(phone);
+    }
+
+    const current =
+      account?.reaction ||
+      account?.autoLikeReaction ||
+      account?.reactionEmoji ||
+      '❤️';
+
+    return (
+      '❤️ *STATUS REACTION*\n\n' +
+      `Current reaction: ${current}\n\n` +
+      'To change it, use:\n' +
+      '`.reaction ❤️`\n' +
+      '`.reaction 👍`\n' +
+      '`.reaction 😂`\n' +
+      '`.reaction 🔥`'
+    );
+  }
+
+  try {
+    let saved = false;
+
+    /*
+     * Try the known reaction setter methods.
+     */
+
+    if (
+      typeof accountService.setStatusReactionEmoji ===
+      'function'
+    ) {
+      saved =
+        await accountService.setStatusReactionEmoji(
+          phone,
+          emoji
+        );
+
+    } else if (
+      typeof accountService.setReactionEmoji ===
+      'function'
+    ) {
+      saved =
+        await accountService.setReactionEmoji(
+          phone,
+          emoji
+        );
+
+    } else if (
+      typeof accountService.setAutoLikeReaction ===
+      'function'
+    ) {
+      saved =
+        await accountService.setAutoLikeReaction(
+          phone,
+          emoji
+        );
+
+    } else {
+      /*
+       * Last-resort account object update.
+       */
+
+      const account =
+        typeof accountService.getAccount ===
+        'function'
+          ? accountService.getAccount(
+              phone
+            )
+          : null;
+
+      if (account) {
+        account.statusReactionEmoji =
+          emoji;
+
+        account.reactionEmoji =
+          emoji;
+
+        account.autoLikeReaction =
+          emoji;
+
+        account.reaction =
+          emoji;
+
+        account.updatedAt =
+          new Date().toISOString();
+
+        if (
+          typeof accountService.saveAccounts ===
+          'function'
+        ) {
+          await accountService.saveAccounts();
+        }
+
+        saved = true;
+      }
+    }
+
+    if (!saved) {
+      return (
+        '❌ Could not save the reaction emoji.'
+      );
+    }
+
+    /*
+     * Restart the status monitor so the
+     * worker immediately receives the new emoji.
+     */
+
+    if (
+      typeof service?.startStatusMonitor ===
+      'function'
+    ) {
+      await service.startStatusMonitor(
+        phone
+      );
+    }
+
+    return (
+      `✅ *Reaction updated!*\n\n` +
+      `New Status reaction: ${emoji}`
+    );
+
+  } catch (error) {
+    console.error(
+      '[Reaction] Error:',
+      error
+    );
+
+    return (
+      `❌ Could not update reaction: ${
+        error?.message ||
+        'Unknown error'
+      }`
+    );
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
+| REACT COMMAND
+|--------------------------------------------------------------------------
+*/
+
+async function reactCommand(
+  context,
+  args = []
+) {
+  /*
+   * .react is kept as an alias for
+   * .reaction.
+   */
+
+  return reactionCommand(
+    context,
+    args
+  );
+}
+
+/*
+|--------------------------------------------------------------------------
+| VIEW STATUS COMMAND
+|--------------------------------------------------------------------------
+*/
+
+async function viewStatusCommand(
+  context,
+  args = []
+) {
+  const phone =
+    String(
+      context?.phone || ''
+    ).replace(/\D/g, '');
+
+  const service =
+    context?.service;
+
+  if (!phone) {
+    return (
+      '❌ Could not identify the WhatsApp account.'
+    );
+  }
+
+  /*
+   * No argument means show status.
+   */
+
+  const action =
+    String(
+      args?.[0] || 'status'
+    ).toLowerCase();
+
+  if (
+    action === 'status'
+  ) {
     try {
-      const result =
-        await callService(
-          context,
-          [
-            'getStatus',
-            'getAccountStatus'
-          ],
-          [context?.phone]
-        ) || {};
+      const worker =
+        typeof service?.getStatusAutomation ===
+        'function'
+          ? service.getStatusAutomation(
+              phone
+            )
+          : typeof service?.getStatus ===
+              'function'
+            ? service.getStatus(phone)
+            : null;
 
       return (
-        `❤️ Current reaction: ${
-          result.reaction ||
-          result.autoLikeReaction ||
-          result.reactionEmoji ||
-          '❤️'
-        }\n\n` +
-        'Change it with:\n' +
-        '*.reaction ❤️*'
+        '👀 *STATUS VIEWER*\n\n' +
+        `Worker: ${
+          worker?.running === true
+            ? 'RUNNING ✅'
+            : 'STOPPED 🛑'
+        }\n` +
+        `Auto View: ${
+          worker?.autoView === true
+            ? 'ON ✅'
+            : 'OFF 🛑'
+        }\n` +
+        `Auto Like: ${
+          worker?.autoLike === true
+            ? 'ON ✅'
+            : 'OFF 🛑'
+        }`
       );
 
     } catch (error) {
       return (
-        `❌ Reaction status error: ${
+        `❌ Status viewer error: ${
           error?.message ||
           'Unknown error'
         }`
@@ -941,31 +1144,43 @@ async function reactionCommand(
     }
   }
 
+  /*
+   * Manual status viewing is delegated to
+   * the status service/engine.
+   */
+
   try {
     const result =
       await callService(
         context,
         [
-          'setReaction',
-          'setAutoLikeReaction',
-          'setStatusReaction'
+          'viewStatus',
+          'viewStatusById',
+          'processStatus'
         ],
-        [context?.phone, reaction]  // ✅ FIXED: Pass phone + reaction
+        [phone, args]
       );
 
-    if (result === undefined) {
-      return (
-        '❌ Reaction could not be saved.'
-      );
+    if (
+      result !== undefined &&
+      result !== null
+    ) {
+      return String(result);
     }
 
     return (
-      `✅ Automatic Status reaction changed to ${reaction}`
+      'ℹ️ Status viewer is running. ' +
+      'New statuses will be handled automatically according to your settings.'
     );
 
   } catch (error) {
+    console.error(
+      '[ViewStatus] Error:',
+      error
+    );
+
     return (
-      `❌ Reaction error: ${
+      `❌ Could not process Status: ${
         error?.message ||
         'Unknown error'
       }`
@@ -975,110 +1190,13 @@ async function reactionCommand(
 
 /*
 |--------------------------------------------------------------------------
-| MANUAL REACT
-|--------------------------------------------------------------------------
-*/
-
-async function reactCommand(
-  context,
-  args
-) {
-  const reaction =
-    String(
-      args?.[0] || '❤️'
-    ).trim();
-
-  try {
-    const result =
-      await callService(
-        context,
-        [
-          'reactToCurrentStatus',
-          'reactToLatestStatus',
-          'reactToStatus',
-          'reactStatus',
-          'likeStatus'
-        ],
-        [context?.phone, reaction]  // ✅ FIXED: Pass phone + reaction
-      );
-
-    if (result === undefined) {
-      return (
-        '❌ Manual Status reaction is not available from the WhatsApp service.'
-      );
-    }
-
-    if (result === false) {
-      return (
-        '⚠️ No eligible Status was found.'
-      );
-    }
-
-    return (
-      `✅ Status reacted with ${reaction}`
-    );
-
-  } catch (error) {
-    return (
-      `❌ Status reaction failed: ${
-        error?.message ||
-        'Unknown error'
-      }`
-    );
-  }
-}
-
-/*
-|--------------------------------------------------------------------------
-| VIEW STATUS
-|--------------------------------------------------------------------------
-*/
-
-async function viewStatusCommand(
-  context
-) {
-  try {
-    const result =
-      await callService(
-        context,
-        [
-          'checkStatuses',
-          'viewStatuses',
-          'openStatuses',
-          'processStatuses'
-        ],
-        [context?.phone]  // ✅ FIXED: Pass phone
-      );
-
-    if (result === undefined) {
-      return (
-        '❌ Status viewing service is not available.'
-      );
-    }
-
-    return (
-      '👁️ Status processing started.'
-    );
-
-  } catch (error) {
-    return (
-      `❌ Status view failed: ${
-        error?.message ||
-        'Unknown error'
-      }`
-    );
-  }
-}
-
-/*
-|--------------------------------------------------------------------------
-| PAIR
+| PAIR COMMAND
 |--------------------------------------------------------------------------
 */
 
 async function pairCommand(
   context,
-  args
+  args = []
 ) {
   const phone =
     String(
@@ -1087,11 +1205,14 @@ async function pairCommand(
       ''
     ).replace(/\D/g, '');
 
+  const service =
+    context?.service;
+
   if (!phone) {
     return (
-      '❌ Phone number required.\n\n' +
+      '❌ Please provide a phone number.\n\n' +
       'Example:\n' +
-      '*.pair 233XXXXXXXXX*'
+      '`.pair 233XXXXXXXXX`'
     );
   }
 
@@ -1100,29 +1221,76 @@ async function pairCommand(
       await callService(
         context,
         [
-          'startAccount',
-          'connectAccount',
-          'pairAccount'
+          'pair',
+          'requestPairing',
+          'pairAccount',
+          'startPairing'
         ],
         [phone]
       );
 
-    if (result?.pairingCode) {
+    if (
+      result !== undefined &&
+      result !== null
+    ) {
+      if (
+        typeof result === 'string'
+      ) {
+        return result;
+      }
+
+      if (
+        result.code ||
+        result.pairingCode
+      ) {
+        return (
+          '🔐 *PAIRING CODE*\n\n' +
+          `Code: ${
+            result.code ||
+            result.pairingCode
+          }`
+        );
+      }
+
       return (
-        '🔑 *WHATSAPP PAIRING CODE*\n\n' +
-        `Phone: ${phone}\n` +
-        `Code: *${result.pairingCode}*`
+        '✅ Pairing request started.'
       );
     }
 
+    /*
+     * Some services expose pairing through
+     * getPairingCode rather than pair().
+     */
+
+    if (
+      typeof service?.getPairingCode ===
+      'function'
+    ) {
+      const code =
+        await service.getPairingCode(
+          phone
+        );
+
+      if (code) {
+        return (
+          '🔐 *PAIRING CODE*\n\n' +
+          `Code: ${code}`
+        );
+      }
+    }
+
     return (
-      '⏳ WhatsApp pairing has been started.\n' +
-      'Use *.paircode* to check for the pairing code.'
+      '⚠️ Pairing request could not be started.'
     );
 
   } catch (error) {
+    console.error(
+      '[Pair] Error:',
+      error
+    );
+
     return (
-      `❌ Pairing failed: ${
+      `❌ Pairing error: ${
         error?.message ||
         'Unknown error'
       }`
@@ -1137,41 +1305,13 @@ async function pairCommand(
 */
 
 async function pairCodeCommand(
-  context
+  context,
+  args = []
 ) {
-  try {
-    const result =
-      await callService(
-        context,
-        [
-          'getPairingCode',
-          'getPairCode'
-        ],
-        [context?.phone]
-      );
-
-    if (
-      result?.available &&
-      result?.pairingCode
-    ) {
-      return (
-        '🔑 *PAIRING CODE*\n\n' +
-        `*${result.pairingCode}*`
-      );
-    }
-
-    return (
-      '⏳ No pairing code is currently available.'
-    );
-
-  } catch (error) {
-    return (
-      `❌ Pairing code error: ${
-        error?.message ||
-        'Unknown error'
-      }`
-    );
-  }
+  return pairCommand(
+    context,
+    args
+  );
 }
 
 /*
@@ -1182,7 +1322,7 @@ async function pairCodeCommand(
 
 async function connectCommand(
   context,
-  args
+  args = []
 ) {
   const phone =
     String(
@@ -1192,7 +1332,9 @@ async function connectCommand(
     ).replace(/\D/g, '');
 
   if (!phone) {
-    return '❌ Phone number required.';
+    return (
+      '❌ Please provide a phone number.'
+    );
   }
 
   try {
@@ -1200,27 +1342,47 @@ async function connectCommand(
       await callService(
         context,
         [
-          'startAccount',
-          'connectAccount'
+          'connect',
+          'connectAccount',
+          'startClient',
+          'start'
         ],
         [phone]
       );
 
+    if (
+      result !== undefined &&
+      result !== null
+    ) {
+      if (
+        typeof result === 'string'
+      ) {
+        return result;
+      }
+
+      return (
+        '✅ Connection request started.'
+      );
+    }
+
     return (
-      result?.message ||
-      '🔄 WhatsApp connection started.'
+      '⚠️ Could not start the WhatsApp connection.'
     );
 
   } catch (error) {
+    console.error(
+      '[Connect] Error:',
+      error
+    );
+
     return (
-      `❌ Connection failed: ${
+      `❌ Connection error: ${
         error?.message ||
         'Unknown error'
       }`
     );
   }
 }
-
 /*
 |--------------------------------------------------------------------------
 | DISCONNECT
@@ -1228,27 +1390,62 @@ async function connectCommand(
 */
 
 async function disconnectCommand(
-  context
+  context,
+  args = []
 ) {
+  const phone =
+    String(
+      args?.[0] ||
+      context?.phone ||
+      ''
+    ).replace(/\D/g, '');
+
+  if (!phone) {
+    return (
+      '❌ Please provide a phone number.'
+    );
+  }
+
   try {
     const result =
       await callService(
         context,
         [
+          'disconnect',
           'disconnectAccount',
-          'disconnect'
+          'stopClient',
+          'stop'
         ],
-        [context?.phone]
+        [phone]
       );
 
+    if (
+      result !== undefined &&
+      result !== null
+    ) {
+      if (
+        typeof result === 'string'
+      ) {
+        return result;
+      }
+
+      return (
+        '✅ WhatsApp account disconnected.'
+      );
+    }
+
     return (
-      result?.message ||
-      '🔴 WhatsApp account disconnected.'
+      '⚠️ Could not disconnect the account.'
     );
 
   } catch (error) {
+    console.error(
+      '[Disconnect] Error:',
+      error
+    );
+
     return (
-      `❌ Disconnect failed: ${
+      `❌ Disconnect error: ${
         error?.message ||
         'Unknown error'
       }`
@@ -1263,28 +1460,62 @@ async function disconnectCommand(
 */
 
 async function logoutCommand(
-  context
+  context,
+  args = []
 ) {
+  const phone =
+    String(
+      args?.[0] ||
+      context?.phone ||
+      ''
+    ).replace(/\D/g, '');
+
+  if (!phone) {
+    return (
+      '❌ Please provide a phone number.'
+    );
+  }
+
   try {
     const result =
       await callService(
         context,
         [
-          'disconnectAccount',
+          'logout',
           'logoutAccount',
-          'logout'
+          'destroy',
+          'removeAccount'
         ],
-        [context?.phone]
+        [phone]
       );
 
+    if (
+      result !== undefined &&
+      result !== null
+    ) {
+      if (
+        typeof result === 'string'
+      ) {
+        return result;
+      }
+
+      return (
+        '✅ WhatsApp account logged out successfully.'
+      );
+    }
+
     return (
-      result?.message ||
-      '🔴 WhatsApp session logged out.'
+      '⚠️ Could not log out the account.'
     );
 
   } catch (error) {
+    console.error(
+      '[Logout] Error:',
+      error
+    );
+
     return (
-      `❌ Logout failed: ${
+      `❌ Logout error: ${
         error?.message ||
         'Unknown error'
       }`
@@ -1299,56 +1530,82 @@ async function logoutCommand(
 */
 
 async function settingsCommand(
-  context
+  context,
+  args = []
 ) {
+  const phone =
+    String(
+      context?.phone || ''
+    ).replace(/\D/g, '');
+
+  const accountService =
+    context?.multiAccountService ||
+    context?.accountService;
+
+  if (!phone) {
+    return (
+      '❌ Could not identify the WhatsApp account.'
+    );
+  }
+
   try {
-    const result =
-      await callService(
-        context,
-        [
-          'getStatus',
-          'getAccountStatus'
-        ],
-        [context?.phone]
-      ) || {};
+    const account =
+      typeof accountService?.getAccount ===
+      'function'
+        ? accountService.getAccount(
+            phone
+          )
+        : null;
+
+    if (!account) {
+      return (
+        '❌ Account not found.'
+      );
+    }
+
+    const autoView =
+      account.autoViewStatus === true ||
+      account.autoView === true ||
+      account.statusView === true;
+
+    const autoLike =
+      account.autoLike === true;
+
+    const reaction =
+      account.statusReactionEmoji ||
+      account.reactionEmoji ||
+      account.autoLikeReaction ||
+      account.reaction ||
+      '❤️';
 
     return (
-      '⚙️ *SETTINGS*\n\n' +
-      `Account: ${
-        context?.phone ||
-        'Unknown'
+      '⚙️ *ACCOUNT SETTINGS*\n\n' +
+      `📱 Phone: ${phone}\n\n` +
+      `👀 Auto View: ${
+        autoView
+          ? 'ON ✅'
+          : 'OFF 🛑'
       }\n` +
-      `Connection: ${
-        result.status ||
-        'Unknown'
+      `❤️ Auto Like: ${
+        autoLike
+          ? 'ON ✅'
+          : 'OFF 🛑'
       }\n` +
-      `Auto View: ${
-        result.autoView !== undefined
-          ? (
-              result.autoView
-                ? 'ON'
-                : 'OFF'
-            )
-          : 'Unknown'
-      }\n` +
-      `Auto Like: ${
-        result.autoLike !== undefined
-          ? (
-              result.autoLike
-                ? 'ON'
-                : 'OFF'
-            )
-          : 'Unknown'
-      }\n` +
-      `Reaction: ${
-        result.reaction ||
-        result.autoLikeReaction ||
-        result.reactionEmoji ||
-        '❤️'
-      }`
+      `💬 Reaction: ${reaction}\n\n` +
+      'Commands:\n' +
+      '• *.autoview on*\n' +
+      '• *.autoview off*\n' +
+      '• *.autolike on*\n' +
+      '• *.autolike off*\n' +
+      '• *.reaction ❤️'
     );
 
   } catch (error) {
+    console.error(
+      '[Settings] Error:',
+      error
+    );
+
     return (
       `❌ Settings error: ${
         error?.message ||
@@ -1365,37 +1622,93 @@ async function settingsCommand(
 */
 
 async function accountCommand(
-  context
+  context,
+  args = []
 ) {
+  const phone =
+    String(
+      args?.[0] ||
+      context?.phone ||
+      ''
+    ).replace(/\D/g, '');
+
+  const accountService =
+    context?.multiAccountService ||
+    context?.accountService;
+
+  if (!phone) {
+    return (
+      '❌ Could not identify the account.'
+    );
+  }
+
   try {
-    const result =
-      await callService(
-        context,
-        [
-          'getStatus',
-          'getAccountStatus'
-        ],
-        [context?.phone]
-      ) || {};
+    if (
+      typeof accountService?.getAccount !==
+      'function'
+    ) {
+      return (
+        '❌ Account service is unavailable.'
+      );
+    }
+
+    const account =
+      accountService.getAccount(
+        phone
+      );
+
+    if (!account) {
+      return (
+        '❌ Account not found.'
+      );
+    }
+
+    const autoView =
+      account.autoViewStatus === true ||
+      account.autoView === true ||
+      account.statusView === true;
+
+    const autoLike =
+      account.autoLike === true;
 
     return (
-      '👤 *ACCOUNT*\n\n' +
-      `Phone: ${
-        context?.phone ||
-        'Unknown'
+      '👤 *ACCOUNT INFORMATION*\n\n' +
+      `📱 Phone: ${phone}\n` +
+      `🟢 Active: ${
+        account.active === false
+          ? 'NO ❌'
+          : 'YES ✅'
       }\n` +
-      `Status: ${
-        result.status ||
-        'Unknown'
+      `🔗 Connected: ${
+        account.connected === true
+          ? 'YES ✅'
+          : 'NO 🛑'
       }\n` +
-      `Connected: ${
-        result.connected
-          ? 'YES'
-          : 'NO'
+      `👀 Auto View: ${
+        autoView
+          ? 'ON ✅'
+          : 'OFF 🛑'
+      }\n` +
+      `❤️ Auto Like: ${
+        autoLike
+          ? 'ON ✅'
+          : 'OFF 🛑'
+      }\n` +
+      `💬 Reaction: ${
+        account.statusReactionEmoji ||
+        account.reactionEmoji ||
+        account.autoLikeReaction ||
+        account.reaction ||
+        '❤️'
       }`
     );
 
   } catch (error) {
+    console.error(
+      '[Account] Error:',
+      error
+    );
+
     return (
       `❌ Account error: ${
         error?.message ||
@@ -1412,34 +1725,56 @@ async function accountCommand(
 */
 
 async function trialCommand(
-  context
+  context,
+  args = []
 ) {
+  const phone =
+    String(
+      context?.phone || ''
+    ).replace(/\D/g, '');
+
   try {
     const result =
       await callService(
         context,
         [
           'getTrialStatus',
-          'getAccountStatus'
+          'startTrial',
+          'trial'
         ],
-        [context?.phone]
-      ) || {};
+        [phone, args]
+      );
+
+    if (
+      result !== undefined &&
+      result !== null
+    ) {
+      if (
+        typeof result === 'string'
+      ) {
+        return result;
+      }
+
+      return (
+        '🎁 *TRIAL STATUS*\n\n' +
+        `${JSON.stringify(
+          result,
+          null,
+          2
+        )}`
+      );
+    }
 
     return (
-      '🎁 *TRIAL STATUS*\n\n' +
-      `Status: ${
-        result.trialStatus ||
-        result.subscriptionStatus ||
-        'Unknown'
-      }\n` +
-      `Expires: ${
-        result.trialExpires ||
-        result.expiresAt ||
-        'Unknown'
-      }`
+      '🎁 Trial information is currently unavailable.'
     );
 
   } catch (error) {
+    console.error(
+      '[Trial] Error:',
+      error
+    );
+
     return (
       `❌ Trial error: ${
         error?.message ||
@@ -1455,11 +1790,78 @@ async function trialCommand(
 |--------------------------------------------------------------------------
 */
 
-async function subscribeCommand() {
-  return (
-    '💳 *SUBSCRIPTION*\n\n' +
-    'Your subscription/payment system is available through the bot dashboard.'
-  );
+async function subscribeCommand(
+  context,
+  args = []
+) {
+  const phone =
+    String(
+      context?.phone || ''
+    ).replace(/\D/g, '');
+
+  try {
+    const result =
+      await callService(
+        context,
+        [
+          'subscribe',
+          'createSubscription',
+          'startSubscription'
+        ],
+        [phone, args]
+      );
+
+    if (
+      result !== undefined &&
+      result !== null
+    ) {
+      if (
+        typeof result === 'string'
+      ) {
+        return result;
+      }
+
+      if (
+        result.url ||
+        result.link
+      ) {
+        return (
+          '💳 *SUBSCRIPTION*\n\n' +
+          'Continue here:\n' +
+          `${
+            result.url ||
+            result.link
+          }`
+        );
+      }
+
+      return (
+        '💳 *SUBSCRIPTION*\n\n' +
+        `${JSON.stringify(
+          result,
+          null,
+          2
+        )}`
+      );
+    }
+
+    return (
+      '💳 Subscription service is currently unavailable.'
+    );
+
+  } catch (error) {
+    console.error(
+      '[Subscribe] Error:',
+      error
+    );
+
+    return (
+      `❌ Subscription error: ${
+        error?.message ||
+        'Unknown error'
+      }`
+    );
+  }
 }
 
 /*
@@ -1468,17 +1870,59 @@ async function subscribeCommand() {
 |--------------------------------------------------------------------------
 */
 
-async function infoCommand() {
-  return (
-    '🤖 *WA-AutoBot*\n\n' +
-    'WhatsApp automation bot with:\n' +
-    '• Phone pairing\n' +
-    '• Auto View\n' +
-    '• Auto Like\n' +
-    '• Status reactions\n' +
-    '• Account management\n' +
-    '• Subscription control'
-  );
+async function infoCommand(
+  context,
+  args = []
+) {
+  const phone =
+    String(
+      context?.phone || ''
+    ).replace(/\D/g, '');
+
+  const accountService =
+    context?.multiAccountService ||
+    context?.accountService;
+
+  try {
+    const account =
+      typeof accountService?.getAccount ===
+      'function'
+        ? accountService.getAccount(
+            phone
+          )
+        : null;
+
+    return (
+      'ℹ️ *WA-AutoBot*\n\n' +
+      '🤖 WhatsApp automation bot\n' +
+      `📱 Account: ${
+        phone || 'Unknown'
+      }\n` +
+      `📦 Commands loaded: ${
+        commands.size
+      }\n` +
+      `👀 Auto View: ${
+        account?.autoViewStatus === true ||
+        account?.autoView === true ||
+        account?.statusView === true
+          ? 'ON'
+          : 'OFF'
+      }\n` +
+      `❤️ Auto Like: ${
+        account?.autoLike === true
+          ? 'ON'
+          : 'OFF'
+      }`
+    );
+
+  } catch (error) {
+    return (
+      `❌ Info error: ${
+        error?.message ||
+        'Unknown error'
+      }`
+    );
+  }
 }
 
 /*
@@ -1488,298 +1932,82 @@ async function infoCommand() {
 */
 
 async function restartCommand(
-  context
+  context,
+  args = []
 ) {
-  try {
-    await callService(
-      context,
-      [
-        'disconnectAccount'
-      ],
-      [context?.phone]
-    );
+  const phone =
+    String(
+      args?.[0] ||
+      context?.phone ||
+      ''
+    ).replace(/\D/g, '');
 
-    await new Promise(
-      resolve =>
-        setTimeout(
-          resolve,
-          1000
-        )
-    );
+  try {
+    /*
+     * Restart status automation first.
+     */
+
+    if (
+      phone &&
+      typeof context?.service
+        ?.startStatusMonitor ===
+        'function'
+    ) {
+      const result =
+        await context.service.startStatusMonitor(
+          phone
+        );
+
+      if (result === false) {
+        return (
+          '⚠️ Status monitor could not be restarted.\n' +
+          'Make sure the WhatsApp account is connected.'
+        );
+      }
+    }
+
+    /*
+     * Then try the general restart method.
+     */
 
     const result =
       await callService(
         context,
         [
-          'startAccount'
+          'restart',
+          'restartAccount',
+          'restartClient'
         ],
-        [context?.phone]
+        [phone]
       );
 
-    return (
-      result?.message ||
-      '🔄 WhatsApp account restart initiated.'
-    );
-
-  } catch (error) {
-    return (
-      `❌ Restart failed: ${
-        error?.message ||
-        'Unknown error'
-      }`
-    );
-  }
-}
-
-/*
-|--------------------------------------------------------------------------
-| REGISTER BUILT-IN COMMANDS
-|--------------------------------------------------------------------------
-*/
-
-commands.set('menu', {
-  name: 'menu',
-  description: 'Show all available commands',
-  execute: menuCommand
-});
-
-commands.set('help', {
-  name: 'help',
-  description: 'Show command help',
-  execute: helpCommand
-});
-
-commands.set('ping', {
-  name: 'ping',
-  description: 'Check whether the bot is online',
-  execute: pingCommand
-});
-
-commands.set('status', {
-  name: 'status',
-  description: 'Show WhatsApp account status',
-  execute: statusCommand
-});
-
-commands.set('pair', {
-  name: 'pair',
-  description: 'Start WhatsApp phone-number pairing',
-  execute: pairCommand
-});
-
-commands.set('paircode', {
-  name: 'paircode',
-  description: 'Show the current WhatsApp pairing code',
-  execute: pairCodeCommand
-});
-
-commands.set('connect', {
-  name: 'connect',
-  description: 'Connect the WhatsApp account',
-  execute: connectCommand
-});
-
-commands.set('disconnect', {
-  name: 'disconnect',
-  description: 'Disconnect the WhatsApp account',
-  execute: disconnectCommand
-});
-
-commands.set('logout', {
-  name: 'logout',
-  description: 'Log out of the WhatsApp session',
-  execute: logoutCommand
-});
-
-commands.set('autoview', {
-  name: 'autoview',
-  description: 'Enable or disable automatic Status viewing',
-  execute: autoViewCommand
-});
-
-commands.set('autolike', {
-  name: 'autolike',
-  description: 'Enable or disable automatic Status reactions',
-  execute: autoLikeCommand
-});
-
-commands.set('react', {
-  name: 'react',
-  description: 'React to a WhatsApp Status',
-  execute: reactCommand
-});
-
-commands.set('viewstatus', {
-  name: 'viewstatus',
-  description: 'Manually process available Status messages',
-  execute: viewStatusCommand
-});
-
-commands.set('reaction', {
-  name: 'reaction',
-  description: 'Set the automatic Status reaction',
-  execute: reactionCommand
-});
-
-commands.set('settings', {
-  name: 'settings',
-  description: 'Show current bot settings',
-  execute: settingsCommand
-});
-
-commands.set('account', {
-  name: 'account',
-  description: 'Show account information',
-  execute: accountCommand
-});
-
-commands.set('subscribe', {
-  name: 'subscribe',
-  description: 'Show subscription information',
-  execute: subscribeCommand
-});
-
-commands.set('trial', {
-  name: 'trial',
-  description: 'Show trial information',
-  execute: trialCommand
-});
-
-commands.set('restart', {
-  name: 'restart',
-  description: 'Restart the WhatsApp connection',
-  execute: restartCommand
-});
-
-commands.set('info', {
-  name: 'info',
-  description: 'Show information about WA-AutoBot',
-  execute: infoCommand
-});
-
-/*
-|--------------------------------------------------------------------------
-| LOAD EXTERNAL COMMAND FILES
-|--------------------------------------------------------------------------
-*/
-
-loadCommands();
-
-/*
-|--------------------------------------------------------------------------
-| EXECUTE
-|--------------------------------------------------------------------------
-*/
-
-async function execute(
-  input,
-  context = {}
-) {
-  const text =
-    String(input || '').trim();
-
-  if (!text) {
-    return null;
-  }
-
-  if (!text.startsWith('.')) {
-    return null;
-  }
-
-  const parts =
-    text
-      .slice(1)
-      .trim()
-      .split(/\s+/);
-
-  const commandName =
-    normalizeCommandName(
-      parts.shift()
-    );
-
-  const args = parts;
-
-  if (!commandName) {
-    return null;
-  }
-
-  const command =
-    getCommand(commandName);
-
-  if (!command) {
-    return (
-      `❌ Unknown command: .${commandName}\n\n` +
-      'Use .menu to see available commands.'
-    );
-  }
-
-  try {
     if (
-      typeof command === 'function'
+      result !== undefined &&
+      result !== null
     ) {
-      return await command(
-        context,
-        args
-      );
-    }
+      if (
+        typeof result === 'string'
+      ) {
+        return result;
+      }
 
-    if (
-      typeof command.execute === 'function'
-    ) {
-      return await command.execute(
-        context,
-        args
-      );
-    }
-
-    if (
-      typeof command.run === 'function'
-    ) {
-      return await command.run(
-        context,
-        args
-      );
-    }
-
-    if (
-      typeof command.handler === 'function'
-    ) {
-      return await command.handler(
-        context,
-        args
-      );
-    }
-
-    if (
-      typeof command.handle === 'function'
-    ) {
-      return await command.handle(
-        context,
-        args
-      );
-    }
-
-    if (
-      typeof command.action === 'function'
-    ) {
-      return await command.action(
-        context,
-        args
+      return (
+        '🔄 Account restart initiated.'
       );
     }
 
     return (
-      `❌ Command .${commandName} is not configured correctly.`
+      '🔄 Restart completed.'
     );
 
   } catch (error) {
     console.error(
-      `[Commands] Error executing .${commandName}:`,
+      '[Restart] Error:',
       error
     );
 
     return (
-      `❌ Error running .${commandName}: ${
+      `❌ Restart error: ${
         error?.message ||
         'Unknown error'
       }`
@@ -1789,36 +2017,650 @@ async function execute(
 
 /*
 |--------------------------------------------------------------------------
-| RELOAD
+| BUILT-IN COMMAND REGISTRATION
+|--------------------------------------------------------------------------
+|
+| These commands are intentionally registered here.
+| If separate command files have the same names,
+| loadCommands() will not overwrite these handlers.
 |--------------------------------------------------------------------------
 */
 
-async function reloadCommand() {
-  loadCommands();
+commands.set(
+  'menu',
+  {
+    name: 'menu',
+    description: 'Show available commands',
+    execute: menuCommand
+  }
+);
 
-  return (
-    `🔄 Reloaded ${commands.size} commands.`
-  );
-}
+commands.set(
+  'help',
+  {
+    name: 'help',
+    description: 'Show help',
+    execute: helpCommand
+  }
+);
 
-commands.set('reload', {
-  name: 'reload',
-  description: 'Reload command files',
-  execute: reloadCommand
-});
+commands.set(
+  'ping',
+  {
+    name: 'ping',
+    description: 'Check bot status',
+    execute: pingCommand
+  }
+);
+
+commands.set(
+  'status',
+  {
+    name: 'status',
+    description: 'Show account status',
+    execute: statusCommand
+  }
+);
+
+commands.set(
+  'autoview',
+  {
+    name: 'autoview',
+    description: 'Automatically view WhatsApp Status',
+    execute: autoViewCommand
+  }
+);
+
+commands.set(
+  'autolike',
+  {
+    name: 'autolike',
+    description: 'Automatically react to WhatsApp Status',
+    execute: autoLikeCommand
+  }
+);
+
+commands.set(
+  'reaction',
+  {
+    name: 'reaction',
+    description: 'Set Status reaction emoji',
+    execute: reactionCommand
+  }
+);
+
+commands.set(
+  'react',
+  {
+    name: 'react',
+    description: 'Set Status reaction emoji',
+    execute: reactCommand
+  }
+);
+
+commands.set(
+  'viewstatus',
+  {
+    name: 'viewstatus',
+    description: 'View Status automation information',
+    execute: viewStatusCommand
+  }
+);
+
+commands.set(
+  'pairstatus',
+  {
+    name: 'pairstatus',
+    description: 'Pair WhatsApp account',
+    execute: pairCommand
+  }
+);
+
+commands.set(
+  'pair',
+  {
+    name: 'pair',
+    description: 'Pair WhatsApp account',
+    execute: pairCommand
+  }
+);
+
+commands.set(
+  'paircode',
+  {
+    name: 'paircode',
+    description: 'Generate pairing code',
+    execute: pairCodeCommand
+  }
+);
+
+commands.set(
+  'connect',
+  {
+    name: 'connect',
+    description: 'Connect WhatsApp account',
+    execute: connectCommand
+  }
+);
+
+commands.set(
+  'disconnect',
+  {
+    name: 'disconnect',
+    description: 'Disconnect WhatsApp account',
+    execute: disconnectCommand
+  }
+);
+
+commands.set(
+  'logout',
+  {
+    name: 'logout',
+    description: 'Log out WhatsApp account',
+    execute: logoutCommand
+  }
+);
+
+commands.set(
+  'settings',
+  {
+    name: 'settings',
+    description: 'Show account settings',
+    execute: settingsCommand
+  }
+);
+
+commands.set(
+  'account',
+  {
+    name: 'account',
+    description: 'Show account information',
+    execute: accountCommand
+  }
+);
+
+commands.set(
+  'trial',
+  {
+    name: 'trial',
+    description: 'Show trial information',
+    execute: trialCommand
+  }
+);
+
+commands.set(
+  'subscribe',
+  {
+    name: 'subscribe',
+    description: 'Subscribe to the service',
+    execute: subscribeCommand
+  }
+);
+
+commands.set(
+  'info',
+  {
+    name: 'info',
+    description: 'Show bot information',
+    execute: infoCommand
+  }
+);
+
+commands.set(
+  'restart',
+  {
+    name: 'restart',
+    description: 'Restart account services',
+    execute: restartCommand
+  }
+);
 
 /*
 |--------------------------------------------------------------------------
-| PUBLIC API
+| LOAD EXTERNAL COMMANDS
+|--------------------------------------------------------------------------
+*/
+
+loadCommands();
+/*
+|--------------------------------------------------------------------------
+| COMMAND EXECUTOR
+|--------------------------------------------------------------------------
+*/
+
+async function execute(
+  context = {},
+  input = ''
+) {
+  try {
+    /*
+     * Support both:
+     *
+     * execute(context, '.autolike on')
+     *
+     * and:
+     *
+     * execute({
+     *   ...context,
+     *   body: '.autolike on'
+     * })
+     */
+
+    let text = input;
+
+    if (
+      !text &&
+      typeof context?.body === 'string'
+    ) {
+      text = context.body;
+    }
+
+    if (
+      !text &&
+      typeof context?.message?.body ===
+        'string'
+    ) {
+      text =
+        context.message.body;
+    }
+
+    text = String(
+      text || ''
+    ).trim();
+
+    if (!text) {
+      return null;
+    }
+
+    /*
+     * Commands must begin with a dot.
+     */
+
+    if (!text.startsWith('.')) {
+      return null;
+    }
+
+    /*
+     * Split command and arguments.
+     *
+     * Example:
+     * .autolike on
+     *
+     * command = autolike
+     * args = ['on']
+     */
+
+    const parts =
+      text
+        .slice(1)
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+
+    if (!parts.length) {
+      return null;
+    }
+
+    const commandName =
+      normalizeCommandName(
+        parts.shift()
+      );
+
+    const args = parts;
+
+    const command =
+      commands.get(commandName);
+
+    if (!command) {
+      return (
+        `❌ Unknown command: *.${commandName}*\n\n` +
+        'Use *.menu* to see available commands.'
+      );
+    }
+
+    /*
+     * Every command receives the same context.
+     */
+
+    const commandContext = {
+      ...context,
+      command:
+        commandName,
+      args
+    };
+
+    /*
+     * Support several command module formats.
+     */
+
+    if (
+      typeof command === 'function'
+    ) {
+      return await command(
+        commandContext,
+        args
+      );
+    }
+
+    if (
+      typeof command.execute ===
+      'function'
+    ) {
+      return await command.execute(
+        commandContext,
+        args
+      );
+    }
+
+    if (
+      typeof command.run ===
+      'function'
+    ) {
+      return await command.run(
+        commandContext,
+        args
+      );
+    }
+
+    if (
+      typeof command.handler ===
+      'function'
+    ) {
+      return await command.handler(
+        commandContext,
+        args
+      );
+    }
+
+    return (
+      `❌ Command *.${commandName}* has no executable handler.`
+    );
+
+  } catch (error) {
+    console.error(
+      '[Commands] Execution error:',
+      error
+    );
+
+    return (
+      '❌ Command failed.\n\n' +
+      `${
+        error?.message ||
+        'Unknown error'
+      }`
+    );
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
+| RELOAD COMMAND
+|--------------------------------------------------------------------------
+*/
+
+async function reloadCommand(
+  context,
+  args = []
+) {
+  try {
+    /*
+     * Do not remove the built-in handlers.
+     * Only reload external command modules.
+     */
+
+    let files = [];
+
+    try {
+      files =
+        fs.readdirSync(
+          COMMANDS_DIR
+        );
+    } catch (error) {
+      return (
+        `❌ Could not read commands directory: ${
+          error?.message ||
+          'Unknown error'
+        }`
+      );
+    }
+
+    let loaded = 0;
+
+    for (const file of files) {
+      if (
+        file === 'index.js' ||
+        !file.endsWith('.js')
+      ) {
+        continue;
+      }
+
+      const fullPath =
+        path.join(
+          COMMANDS_DIR,
+          file
+        );
+
+      try {
+        delete require.cache[
+          require.resolve(
+            fullPath
+          )
+        ];
+
+        const commandModule =
+          require(fullPath);
+
+        if (!commandModule) {
+          continue;
+        }
+
+        let name =
+          commandModule.name ||
+          commandModule.command ||
+          path.basename(
+            file,
+            '.js'
+          );
+
+        name =
+          normalizeCommandName(
+            name
+          );
+
+        if (!name) {
+          continue;
+        }
+
+        /*
+         * Never replace built-in handlers.
+         * This is important for the corrected
+         * Auto View and Auto Like commands.
+         */
+
+        const builtInCommands = [
+          'menu',
+          'help',
+          'ping',
+          'status',
+          'autoview',
+          'autolike',
+          'reaction',
+          'react',
+          'viewstatus',
+          'pair',
+          'pairstatus',
+          'paircode',
+          'connect',
+          'disconnect',
+          'logout',
+          'settings',
+          'account',
+          'trial',
+          'subscribe',
+          'info',
+          'restart',
+          'reload'
+        ];
+
+        if (
+          builtInCommands.includes(
+            name
+          )
+        ) {
+          continue;
+        }
+
+        commands.set(
+          name,
+          commandModule
+        );
+
+        loaded++;
+
+      } catch (error) {
+        console.error(
+          `[Commands] Reload failed for ${file}:`,
+          error.message
+        );
+      }
+    }
+
+    return (
+      '🔄 *COMMANDS RELOADED*\n\n' +
+      `✅ Reloaded: ${loaded}\n` +
+      `📦 Total available: ${commands.size}`
+    );
+
+  } catch (error) {
+    console.error(
+      '[Commands] Reload error:',
+      error
+    );
+
+    return (
+      `❌ Reload failed: ${
+        error?.message ||
+        'Unknown error'
+      }`
+    );
+  }
+}
+
+/*
+|--------------------------------------------------------------------------
+| REGISTER RELOAD
+|--------------------------------------------------------------------------
+*/
+
+commands.set(
+  'reload',
+  {
+    name: 'reload',
+    description: 'Reload command files',
+    execute: reloadCommand
+  }
+);
+
+/*
+|--------------------------------------------------------------------------
+| COMMAND ALIASES
+|--------------------------------------------------------------------------
+|
+| These aliases make the bot more tolerant
+| of different command names.
+|--------------------------------------------------------------------------
+*/
+
+if (!commands.has('autoviewstatus')) {
+  commands.set(
+    'autoviewstatus',
+    {
+      name: 'autoviewstatus',
+      description: 'Show Auto View Status',
+      execute: autoViewCommand
+    }
+  );
+}
+
+if (!commands.has('autolikestatus')) {
+  commands.set(
+    'autolikestatus',
+    {
+      name: 'autolikestatus',
+      description: 'Show Auto Like Status',
+      execute: autoLikeCommand
+    }
+  );
+}
+
+/*
+|--------------------------------------------------------------------------
+| EXPORTS
 |--------------------------------------------------------------------------
 */
 
 module.exports = {
-  execute,
+  commands,
+
   loadCommands,
+
   getCommand,
+
   getCommands,
+
   getCommandNames,
+
   getCommandList,
-  commands
+
+  normalizeCommandName,
+
+  execute,
+
+  /*
+   * Export the built-in handlers as well.
+   * This is useful for other backend services
+   * that may need to call them directly.
+   */
+
+  menuCommand,
+
+  helpCommand,
+
+  pingCommand,
+
+  statusCommand,
+
+  autoViewCommand,
+
+  autoLikeCommand,
+
+  reactionCommand,
+
+  reactCommand,
+
+  viewStatusCommand,
+
+  pairCommand,
+
+  pairCodeCommand,
+
+  connectCommand,
+
+  disconnectCommand,
+
+  logoutCommand,
+
+  settingsCommand,
+
+  accountCommand,
+
+  trialCommand,
+
+  subscribeCommand,
+
+  infoCommand,
+
+  restartCommand,
+
+  reloadCommand
 };
