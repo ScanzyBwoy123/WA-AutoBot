@@ -462,10 +462,10 @@ class MultiAccountWhatsAppService {
       );
 
       const response =
-        await router.execute(
-          body,
-          context
-        );
+  await router.execute(
+    context,
+    body
+  );
 
       if (
         response !== undefined &&
