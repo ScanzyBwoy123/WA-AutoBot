@@ -1,13 +1,13 @@
 'use strict';
+
 /**
  * ============================================================
  * STATUS ENGINE
  * ============================================================
  *
- * Handles WhatsApp Status automation:
- *
- *   • Auto-view Status
- *   • Auto-like / react to Status
+ * Handles:
+ *   • Auto-view WhatsApp Status
+ *   • Auto-like / reaction to WhatsApp Status
  *   • Manual Status processing
  *   • Manual Status reaction
  *   • Status worker management
@@ -15,51 +15,63 @@
  * The WhatsApp client is supplied by
  * MultiAccountWhatsAppService.
  */
+
 class StatusEngine {
   constructor() {
     this.workers = new Map();
   }
+
   /*
    * ==========================================================
    * BASIC HELPERS
    * ==========================================================
    */
+
   normalizePhone(phone) {
     return String(phone || '').replace(/\D/g, '');
   }
+
   getWorker(phone) {
     return this.workers.get(
       this.normalizePhone(phone)
     );
   }
+
   isRunning(phone) {
     const worker = this.getWorker(phone);
+
     return Boolean(
       worker &&
       worker.running === true
     );
   }
+
+  sleep(ms) {
+    return new Promise(resolve =>
+      setTimeout(resolve, ms)
+    );
+  }
+
   /*
    * ==========================================================
    * STATUS DETECTION
    * ==========================================================
-   *
-   * WhatsApp Web / whatsapp-web.js can identify Status
-   * messages in several different ways depending on the
-   * version and internal message structure.
    */
+
   isStatusMessage(message) {
     if (!message) {
       return false;
     }
+
     /*
-     * Standard whatsapp-web.js property.
+     * Official whatsapp-web.js property.
      */
     if (message.isStatus === true) {
       return true;
     }
+
     /*
-     * Common Status JID checks.
+     * Standard Status JID.
      */
     if (
       message.from === 'status@broadcast' ||
@@ -68,13 +80,12 @@ class StatusEngine {
     ) {
       return true;
     }
+
     /*
-     * Check the internal message data.
-     *
-     * whatsapp-web.js sometimes exposes Status information
-     * through _data depending on the WhatsApp Web version.
+     * Internal WhatsApp data.
      */
     const data = message._data;
+
     if (data) {
       if (
         data.isStatus === true ||
@@ -83,6 +94,7 @@ class StatusEngine {
       ) {
         return true;
       }
+
       if (
         data.from === 'status@broadcast' ||
         data.to === 'status@broadcast' ||
@@ -90,18 +102,19 @@ class StatusEngine {
       ) {
         return true;
       }
-      if (
-        data.id &&
-        (
+
+      if (data.id) {
+        if (
           data.id.remote === 'status@broadcast' ||
           data.id._serialized === 'status@broadcast'
-        )
-      ) {
-        return true;
+        ) {
+          return true;
+        }
       }
     }
+
     /*
-     * Check the public message ID.
+     * Public message ID.
      */
     if (message.id) {
       if (
@@ -111,129 +124,211 @@ class StatusEngine {
         return true;
       }
     }
+
     return false;
   }
+
   /*
    * ==========================================================
    * STATUS ID
    * ==========================================================
    */
+
   getStatusId(message) {
     if (!message) {
       return null;
     }
+
     return (
       message?.id?._serialized ||
-      message?.id?.id ||
       message?._data?.id?._serialized ||
+      message?.id?.id ||
       message?._data?.id?.id ||
-      message?.id ||
+      (
+        typeof message.id === 'string'
+          ? message.id
+          : null
+      ) ||
       null
     );
   }
+
+  getStatusRawId(message) {
+    if (!message) {
+      return null;
+    }
+
+    return (
+      message?.id?.id ||
+      message?._data?.id?.id ||
+      null
+    );
+  }
+
+  getStatusParticipant(message) {
+    if (!message) {
+      return null;
+    }
+
+    const participant =
+      message?.author ||
+      message?._data?.author ||
+      message?._data?.id?.participant ||
+      message?.id?.participant ||
+      null;
+
+    if (
+      typeof participant === 'object'
+    ) {
+      return (
+        participant?._serialized ||
+        participant?.user
+          ? `${participant.user}@c.us`
+          : null
+      );
+    }
+
+    return participant;
+  }
+
   /*
    * ==========================================================
-   * START
+   * START WORKER
    * ==========================================================
    */
-  start(phone, client, options = {}) {
+
+  start(
+    phone,
+    client,
+    options = {}
+  ) {
     const normalized =
       this.normalizePhone(phone);
+
     if (!normalized) {
       throw new Error(
         'WhatsApp account number is required.'
       );
     }
+
     if (!client) {
       throw new Error(
         'WhatsApp client is not available.'
       );
     }
+
     /*
-     * Stop an existing worker first.
-     *
-     * This prevents duplicate workers and duplicate
-     * Status processing.
+     * Remove an existing worker first.
      */
     this.stop(normalized);
+
     const worker = {
       phone: normalized,
       client,
       running: true,
+
       autoView:
         options.autoView === true,
+
       autoLike:
         options.autoLike === true,
+
       emoji:
-        options.emoji ||
-        '❤️',
+        String(
+          options.emoji ||
+          '❤️'
+        ).trim() || '❤️',
+
       messageHandler: null,
+
+      /*
+       * Prevent duplicate processing.
+       */
+      processedStatuses: new Set(),
+
       lastStatusId: null,
-      processedStatuses: new Set()
+
+      startedAt: Date.now()
     };
+
     /*
      * --------------------------------------------------------
-     * STATUS MESSAGE HANDLER
+     * STATUS EVENT HANDLER
      * --------------------------------------------------------
      */
-    const messageHandler = async message => {
-      try {
-        if (!worker.running) {
-          return;
+
+    const messageHandler =
+      async message => {
+        try {
+          if (!worker.running) {
+            return;
+          }
+
+          if (!message) {
+            return;
+          }
+
+          if (
+            !this.isStatusMessage(
+              message
+            )
+          ) {
+            return;
+          }
+
+          const statusId =
+            this.getStatusId(
+              message
+            );
+
+          console.log(
+            `[StatusEngine] Status detected for ${normalized}` +
+            `${statusId ? `: ${statusId}` : ''}`
+          );
+
+          await this.processStatus(
+            normalized,
+            message
+          );
+        } catch (error) {
+          console.error(
+            `[StatusEngine] Worker error for ${normalized}:`,
+            error?.message ||
+            error
+          );
         }
-        if (!message) {
-          return;
-        }
-        /*
-         * Ignore normal WhatsApp messages.
-         */
-        if (!this.isStatusMessage(message)) {
-          return;
-        }
-        console.log(
-          `[StatusEngine] Status detected for ${normalized}`
-        );
-        await this.processStatus(
-          normalized,
-          message
-        );
-      } catch (error) {
-        console.error(
-          `[StatusEngine] Worker error for ${normalized}:`,
-          error?.message || error
-        );
-      }
-    };
+      };
+
     worker.messageHandler =
       messageHandler;
+
     /*
-     * Listen for received messages.
+     * IMPORTANT:
      *
-     * "message" is the primary event for incoming
-     * WhatsApp messages.
+     * Listen to BOTH events.
+     *
+     * Some WhatsApp Web message flows expose Status
+     * messages through message_create.
      */
     client.on(
       'message',
       messageHandler
     );
-    /*
-     * Also listen to message_create because some
-     * WhatsApp Web versions expose certain Status
-     * events through that event.
-     *
-     * The same handler is used so duplicate messages
-     * are prevented by processedStatuses.
-     */
-    /*
-     * Store worker.
-     */
+
+    client.on(
+      'message_create',
+      messageHandler
+    );
+
     this.workers.set(
       normalized,
       worker
     );
+
     console.log(
       `[StatusEngine] Worker started for ${normalized}`
     );
+
     console.log(
       `[StatusEngine] Auto View: ${
         worker.autoView
@@ -241,6 +336,7 @@ class StatusEngine {
           : 'OFF'
       }`
     );
+
     console.log(
       `[StatusEngine] Auto Like: ${
         worker.autoLike
@@ -248,63 +344,79 @@ class StatusEngine {
           : 'OFF'
       }`
     );
+
     console.log(
       `[StatusEngine] Reaction: ${worker.emoji}`
     );
+
     return true;
   }
+
   /*
    * ==========================================================
-   * PROCESS STATUS
+   * PROCESS ONE STATUS
    * ==========================================================
    */
-  async processStatus(phone, message) {
+
+  async processStatus(
+    phone,
+    message
+  ) {
     const normalized =
       this.normalizePhone(phone);
+
     const worker =
       this.getWorker(normalized);
+
     if (!worker) {
       return false;
     }
+
     if (!worker.running) {
       return false;
     }
-    /*
-     * Make sure this is actually a Status.
-     */
-    if (!this.isStatusMessage(message)) {
-      return false;
-    }
-    /*
-     * Identify the Status.
-     */
-    const statusId =
-      this.getStatusId(message);
-    /*
-     * Prevent the same Status from being processed
-     * more than once.
-     */
+
     if (
-      statusId &&
-      worker.processedStatuses.has(statusId)
+      !this.isStatusMessage(
+        message
+      )
     ) {
       return false;
     }
+
+    const statusId =
+      this.getStatusId(message);
+
+    /*
+     * Ignore duplicate events.
+     */
+    if (
+      statusId &&
+      worker.processedStatuses.has(
+        statusId
+      )
+    ) {
+      return false;
+    }
+
     if (statusId) {
       worker.processedStatuses.add(
         statusId
       );
+
       /*
-       * Prevent unlimited memory usage.
+       * Keep memory under control.
        */
       if (
-        worker.processedStatuses.size > 1000
+        worker.processedStatuses.size >
+        1000
       ) {
         const first =
           worker.processedStatuses
             .values()
             .next()
             .value;
+
         if (first) {
           worker.processedStatuses.delete(
             first
@@ -312,109 +424,310 @@ class StatusEngine {
         }
       }
     }
+
     worker.lastStatusId =
       statusId;
+
     let processed = false;
+
     /*
      * --------------------------------------------------------
      * AUTO VIEW
      * --------------------------------------------------------
      */
+
     if (worker.autoView) {
-      const viewed =
-        await this.viewStatus(
-          normalized,
-          message
+      try {
+        const viewed =
+          await this.viewStatus(
+            normalized,
+            message
+          );
+
+        if (viewed) {
+          processed = true;
+        }
+      } catch (error) {
+        console.error(
+          `[StatusEngine] Auto View failed for ${normalized}:`,
+          error?.message ||
+          error
         );
-      if (viewed) {
-        processed = true;
       }
     }
+
     /*
      * --------------------------------------------------------
      * AUTO LIKE
      * --------------------------------------------------------
      */
+
     if (worker.autoLike) {
-      const reacted =
-        await this.reactToStatus(
-          normalized,
-          message,
-          worker.emoji
+      try {
+        const reacted =
+          await this.reactToStatus(
+            normalized,
+            message,
+            worker.emoji
+          );
+
+        if (reacted) {
+          processed = true;
+        }
+      } catch (error) {
+        console.error(
+          `[StatusEngine] Auto Like failed for ${normalized}:`,
+          error?.message ||
+          error
         );
-      if (reacted) {
-        processed = true;
       }
     }
+
     return processed;
   }
+
   /*
    * ==========================================================
    * VIEW STATUS
    * ==========================================================
    */
-async viewStatus(phone, message = null) {
-  const normalized = this.normalizePhone(phone);
-  const worker = this.getWorker(normalized);
 
-  if (!worker || !worker.client) {
-    console.log(
-      `[StatusEngine] Cannot view Status: worker/client unavailable for ${normalized}`
-    );
-    return false;
-  }
+  async viewStatus(
+    phone,
+    message = null
+  ) {
+    const normalized =
+      this.normalizePhone(phone);
 
-  const client = worker.client;
+    const worker =
+      this.getWorker(normalized);
 
-  const participant =
-    message?.author ||
-    message?._data?.author ||
-    message?._data?.id?.participant ||
-    message?.id?.participant ||
-    null;
-
-  if (!participant) {
-    console.log(
-      `[StatusEngine] Cannot resolve Status owner`
-    );
-    return false;
-  }
-
-  try {
-    const broadcast =
-      await client.getBroadcastById(participant);
-
-    if (!broadcast) {
+    if (
+      !worker ||
+      !worker.client
+    ) {
       console.log(
-        `[StatusEngine] No Broadcast found for ${participant}`
+        `[StatusEngine] Cannot view Status: client unavailable for ${normalized}`
       );
+
       return false;
     }
 
-    const statuses =
-      Array.isArray(broadcast.msgs)
-        ? broadcast.msgs
-        : [];
+    const client =
+      worker.client;
 
-    console.log(
-      `[StatusEngine] Broadcast resolved: ${participant} | total=${broadcast.totalCount} | unread=${broadcast.unreadCount} | messages=${statuses.length}`
-    );
-
-    if (!statuses.length) {
-      console.log(
-        `[StatusEngine] No Status messages found for ${participant}`
+    const participant =
+      this.getStatusParticipant(
+        message
       );
+
+    if (!participant) {
+      console.log(
+        `[StatusEngine] Cannot resolve Status owner for ${normalized}`
+      );
+
+      return false;
+    }
+
+    const rawStatusId =
+      this.getStatusRawId(
+        message
+      );
+
+    const serializedStatusId =
+      this.getStatusId(
+        message
+      );
+
+    if (
+      !rawStatusId &&
+      !serializedStatusId
+    ) {
+      console.log(
+        `[StatusEngine] Cannot resolve Status ID for ${normalized}`
+      );
+
+      return false;
+    }
+
+    try {
+      /*
+       * ------------------------------------------------------
+       * First try the Broadcast model.
+       * ------------------------------------------------------
+       */
+
+      if (
+        typeof client.getBroadcastById ===
+        'function'
+      ) {
+        try {
+          const broadcast =
+            await client.getBroadcastById(
+              participant
+            );
+
+          if (broadcast) {
+            const statuses =
+              Array.isArray(
+                broadcast.msgs
+              )
+                ? broadcast.msgs
+                : [];
+
+            console.log(
+              `[StatusEngine] Broadcast ${participant}: ` +
+              `${statuses.length} status message(s)`
+            );
+
+            /*
+             * Find the exact Status first.
+             */
+            let target =
+              statuses.find(
+                status => {
+                  const id =
+                    status?.id?._serialized ||
+                    status?._data?.id?._serialized ||
+                    null;
+
+                  const raw =
+                    status?.id?.id ||
+                    status?._data?.id?.id ||
+                    null;
+
+                  return (
+                    id ===
+                      serializedStatusId ||
+                    raw ===
+                      rawStatusId
+                  );
+                }
+              );
+
+            /*
+             * If exact match isn't available,
+             * use an unread Status.
+             */
+            if (!target) {
+              target =
+                statuses.find(
+                  status =>
+                    status?.viewed !== true &&
+                    status?._data?.viewed !== true
+                );
+            }
+
+            /*
+             * Last fallback.
+             */
+            if (!target) {
+              target =
+                statuses[
+                  statuses.length - 1
+                ];
+            }
+
+            if (target) {
+              const success =
+                await this.markStatusAsRead(
+                  client,
+                  participant,
+                  target
+                );
+
+              if (success) {
+                console.log(
+                  `✅ [StatusEngine] Status viewed for ${normalized}`
+                );
+
+                return true;
+              }
+            }
+          }
+        } catch (error) {
+          console.log(
+            `[StatusEngine] Broadcast view attempt failed for ${normalized}:`,
+            error?.message ||
+            error
+          );
+        }
+      }
+
+      /*
+       * ------------------------------------------------------
+       * Direct internal WhatsApp Web fallback.
+       * ------------------------------------------------------
+       */
+
+      const fallback =
+        await this.markStatusAsReadDirect(
+          client,
+          participant,
+          rawStatusId,
+          serializedStatusId
+        );
+
+      if (fallback) {
+        console.log(
+          `✅ [StatusEngine] Direct Status view succeeded for ${normalized}`
+        );
+
+        return true;
+      }
+
+      console.log(
+        `⚠️ [StatusEngine] Could not verify Status view for ${normalized}`
+      );
+
+      return false;
+
+    } catch (error) {
+      console.error(
+        `[StatusEngine] Status view error for ${normalized}:`,
+        error?.message ||
+        error
+      );
+
+      return false;
+    }
+  }
+
+  /*
+   * ==========================================================
+   * MARK STATUS AS READ
+   * ==========================================================
+   */
+
+  async markStatusAsRead(
+    client,
+    participant,
+    target
+  ) {
+    if (
+      !client ||
+      !target
+    ) {
       return false;
     }
 
     /*
-     * Find the unread Status first.
+     * If already viewed, consider it successful.
      */
-    const target =
-      statuses.find(status =>
-        status?.viewed !== true &&
-        status?._data?.viewed !== true
-      ) || statuses[statuses.length - 1];
+    if (
+      target?.viewed === true ||
+      target?._data?.viewed === true
+    ) {
+      return true;
+    }
+
+    if (
+      !client.pupPage ||
+      typeof client.pupPage.evaluate !==
+        'function'
+    ) {
+      return false;
+    }
 
     const rawStatusId =
       target?.id?.id ||
@@ -426,501 +739,503 @@ async viewStatus(phone, message = null) {
       target?._data?.id?._serialized ||
       null;
 
-    if (!rawStatusId && !serializedStatusId) {
-      console.log(
-        `[StatusEngine] Could not resolve Status message ID`
-      );
-      return false;
-    }
-
-    /*
-     * WPPConnect/WhatsApp Web expects the full Status key:
-     *
-     * false_status@broadcast_STATUS_ID_PARTICIPANT
-     *
-     * Example:
-     * false_status@broadcast_ABC123_123456789@c.us
-     */
     const statusMessageKey =
       serializedStatusId &&
       serializedStatusId.startsWith(
         'false_status@broadcast_'
       )
         ? serializedStatusId
-        : `false_status@broadcast_${rawStatusId || serializedStatusId}_${participant}`;
+        : rawStatusId
+          ? `false_status@broadcast_${rawStatusId}_${participant}`
+          : serializedStatusId;
 
-    const beforeViewed =
-      target?.viewed === true ||
-      target?._data?.viewed === true;
-
-    console.log(
-      `[StatusEngine] Raw Status ID: ${rawStatusId}`
-    );
-
-    console.log(
-      `[StatusEngine] Full Status key: ${statusMessageKey}`
-    );
-
-    console.log(
-      `[StatusEngine] Status viewed BEFORE: ${beforeViewed}`
-    );
-
-    const result =
-      await client.pupPage.evaluate(
-        async ({
-          participant,
-          statusMessageKey,
-          rawStatusId,
-          serializedStatusId
-        }) => {
-          try {
-            const collections =
-              window.require('WAWebCollections');
-
-            /*
-             * Get the StatusV3/Broadcast model.
-             */
-            let status =
-              collections.Status.get(participant);
-
-            if (!status) {
-              status =
-                await collections.Status.find(
-                  participant
-                );
-            }
-
-            if (!status) {
-              return {
-                ok: false,
-                reason: 'STATUS_OWNER_NOT_FOUND'
-              };
-            }
-
-            /*
-             * StatusV3Model has its own sendReadStatus()
-             * operation.
-             */
-            if (
-              typeof status.sendReadStatus !==
-              'function'
-            ) {
-              return {
-                ok: false,
-                reason:
-                  'STATUS_SEND_READ_STATUS_NOT_AVAILABLE'
-              };
-            }
-
-            const messages =
-              status.msgs;
-
-            if (!messages) {
-              return {
-                ok: false,
-                reason:
-                  'STATUS_MESSAGES_COLLECTION_NOT_FOUND'
-              };
-            }
-
-            let targetMessage = null;
-
-            /*
-             * 1. Try the exact full serialized key.
-             */
+    try {
+      const result =
+        await client.pupPage.evaluate(
+          async ({
+            participant,
+            statusMessageKey,
+            rawStatusId,
+            serializedStatusId
+          }) => {
             try {
+              if (
+                !window.require
+              ) {
+                return {
+                  ok: false,
+                  reason:
+                    'window.require unavailable'
+                };
+              }
+
+              const collections =
+                window.require(
+                  'WAWebCollections'
+                );
+
+              if (
+                !collections ||
+                !collections.Status
+              ) {
+                return {
+                  ok: false,
+                  reason:
+                    'WAWebCollections.Status unavailable'
+                };
+              }
+
+              let status =
+                null;
+
+              try {
+                status =
+                  collections.Status.get(
+                    participant
+                  );
+              } catch (_) {}
+
+              if (
+                !status &&
+                typeof collections.Status.find ===
+                  'function'
+              ) {
+                try {
+                  status =
+                    await collections.Status.find(
+                      participant
+                    );
+                } catch (_) {}
+              }
+
+              if (!status) {
+                return {
+                  ok: false,
+                  reason:
+                    'Status owner not found'
+                };
+              }
+
+              if (
+                typeof status.sendReadStatus !==
+                'function'
+              ) {
+                return {
+                  ok: false,
+                  reason:
+                    'sendReadStatus unavailable'
+                };
+              }
+
+              const messages =
+                status.msgs;
+
+              if (!messages) {
+                return {
+                  ok: false,
+                  reason:
+                    'Status messages unavailable'
+                };
+              }
+
+              let targetMessage =
+                null;
+
+              /*
+               * Exact collection lookup.
+               */
               if (
                 typeof messages.get ===
                 'function'
               ) {
+                try {
+                  targetMessage =
+                    messages.get(
+                      statusMessageKey
+                    );
+                } catch (_) {}
+              }
+
+              /*
+               * Search models.
+               */
+              if (
+                !targetMessage &&
+                Array.isArray(
+                  messages.models
+                )
+              ) {
                 targetMessage =
-                  messages.get(
-                    statusMessageKey
+                  messages.models.find(
+                    msg => {
+                      const id =
+                        msg?.id;
+
+                      const serialized =
+                        id?._serialized ||
+                        null;
+
+                      const raw =
+                        id?.id ||
+                        null;
+
+                      return (
+                        serialized ===
+                          statusMessageKey ||
+                        serialized ===
+                          serializedStatusId ||
+                        raw ===
+                          rawStatusId
+                      );
+                    }
                   );
               }
-            } catch (_) {}
 
-            /*
-             * 2. Search collection models.
-             */
-            if (
-              !targetMessage &&
-              Array.isArray(messages.models)
-            ) {
-              targetMessage =
-                messages.models.find(msg => {
-                  const id =
-                    msg?.id;
-
-                  const serialized =
-                    id?._serialized ||
-                    null;
-
-                  const raw =
-                    id?.id ||
-                    null;
-
-                  return (
-                    serialized ===
-                      statusMessageKey ||
-                    serialized ===
-                      serializedStatusId ||
-                    raw === rawStatusId
-                  );
-                });
-            }
-
-            /*
-             * 3. Some WhatsApp builds expose the
-             * collection differently.
-             */
-            if (
-              !targetMessage &&
-              Array.isArray(messages)
-            ) {
-              targetMessage =
-                messages.find(msg => {
-                  const id =
-                    msg?.id;
-
-                  const serialized =
-                    id?._serialized ||
-                    null;
-
-                  const raw =
-                    id?.id ||
-                    null;
-
-                  return (
-                    serialized ===
-                      statusMessageKey ||
-                    serialized ===
-                      serializedStatusId ||
-                    raw === rawStatusId
-                  );
-                });
-            }
-
-            if (!targetMessage) {
               /*
-               * Diagnostic information so the next
-               * failure tells us exactly how the
-               * current WhatsApp build stores the key.
+               * Some builds expose an array.
                */
-              let availableIds = [];
+              if (
+                !targetMessage &&
+                Array.isArray(
+                  messages
+                )
+              ) {
+                targetMessage =
+                  messages.find(
+                    msg => {
+                      const id =
+                        msg?.id;
 
-              try {
-                if (
-                  Array.isArray(messages.models)
-                ) {
-                  availableIds =
-                    messages.models
-                      .slice(0, 20)
-                      .map(msg => ({
-                        serialized:
-                          msg?.id?._serialized ||
-                          null,
-                        raw:
-                          msg?.id?.id ||
-                          null,
-                        participant:
-                          msg?.id?.participant ||
-                          null
-                      }));
-                }
-              } catch (_) {}
+                      const serialized =
+                        id?._serialized ||
+                        null;
 
+                      const raw =
+                        id?.id ||
+                        null;
+
+                      return (
+                        serialized ===
+                          statusMessageKey ||
+                        serialized ===
+                          serializedStatusId ||
+                        raw ===
+                          rawStatusId
+                      );
+                    }
+                  );
+              }
+
+              if (!targetMessage) {
+                return {
+                  ok: false,
+                  reason:
+                    'Status message not found'
+                };
+              }
+
+              const mediaKeyTimestamp =
+                targetMessage.mediaKeyTimestamp ||
+                targetMessage?._data
+                  ?.mediaKeyTimestamp ||
+                null;
+
+              await status.sendReadStatus(
+                targetMessage,
+                mediaKeyTimestamp
+              );
+
+              return {
+                ok: true,
+                viewed:
+                  targetMessage.viewed === true ||
+                  targetMessage?._data?.viewed ===
+                    true
+              };
+
+            } catch (error) {
               return {
                 ok: false,
                 reason:
-                  'STATUS_MESSAGE_NOT_FOUND',
-                requestedKey:
-                  statusMessageKey,
-                rawStatusId,
-                serializedStatusId,
-                availableIds
+                  error?.message ||
+                  String(error)
               };
             }
-
-            const mediaKeyTimestamp =
-              targetMessage.mediaKeyTimestamp ||
-              targetMessage._data
-                ?.mediaKeyTimestamp ||
-              null;
-
-            /*
-             * THIS is the Status-specific read
-             * operation.
-             */
-            await status.sendReadStatus(
-              targetMessage,
-              mediaKeyTimestamp
-            );
-
-            return {
-              ok: true,
-              viewed:
-                targetMessage.viewed === true ||
-                targetMessage._data
-                  ?.viewed === true,
-              resolvedId:
-                targetMessage.id
-                  ?._serialized ||
-                targetMessage.id?.id ||
-                null
-            };
-
-          } catch (error) {
-            return {
-              ok: false,
-              reason:
-                error?.message ||
-                String(error)
-            };
+          },
+          {
+            participant,
+            statusMessageKey,
+            rawStatusId,
+            serializedStatusId
           }
-        },
-        {
-          participant,
-          statusMessageKey,
-          rawStatusId,
-          serializedStatusId
-        }
+        );
+
+      console.log(
+        `[StatusEngine] Status read result: ${JSON.stringify(result)}`
       );
 
-    console.log(
-      `[StatusEngine] sendReadStatus result: ${JSON.stringify(result)}`
-    );
+      if (
+        result?.ok === true
+      ) {
+        return true;
+      }
 
-    /*
-     * Allow WhatsApp Web to update its Status state.
-     */
-    await new Promise(resolve =>
-      setTimeout(resolve, 2500)
-    );
+      return false;
 
-    /*
-     * Refresh the Broadcast.
-     */
-    let refreshedBroadcast = null;
-
-    try {
-      refreshedBroadcast =
-        await client.getBroadcastById(
-          participant
-        );
     } catch (error) {
       console.log(
-        `[StatusEngine] Broadcast refresh failed: ${error?.message || error}`
+        `[StatusEngine] Direct Status read failed:`,
+        error?.message ||
+        error
       );
-    }
 
-    let refreshedTarget = null;
+      return false;
+    }
+  }
+
+  /*
+   * ==========================================================
+   * DIRECT STATUS READ FALLBACK
+   * ==========================================================
+   */
+
+  async markStatusAsReadDirect(
+    client,
+    participant,
+    rawStatusId,
+    serializedStatusId
+  ) {
+    if (
+      !client ||
+      !client.pupPage
+    ) {
+      return false;
+    }
 
     if (
-      refreshedBroadcast?.msgs?.length
+      !rawStatusId &&
+      !serializedStatusId
     ) {
-      refreshedTarget =
-        refreshedBroadcast.msgs.find(
-          status => {
-            const raw =
-              status?.id?.id ||
-              status?._data?.id?.id ||
-              null;
-
-            return raw === rawStatusId;
-          }
-        );
+      return false;
     }
 
-    const afterViewed =
-      refreshedTarget?.viewed === true ||
-      refreshedTarget?._data?.viewed === true;
+    try {
+      const fakeTarget = {
+        id: {
+          id: rawStatusId,
+          _serialized:
+            serializedStatusId
+        },
+        _data: {
+          id: {
+            id: rawStatusId,
+            _serialized:
+              serializedStatusId
+          }
+        }
+      };
 
-    const unreadAfter =
-      refreshedBroadcast?.unreadCount;
-
-    console.log(
-      `[StatusEngine] Status viewed AFTER: ${afterViewed}`
-    );
-
-    console.log(
-      `[StatusEngine] Broadcast unread count AFTER: ${unreadAfter}`
-    );
-
-    if (afterViewed) {
-      console.log(
-        `✅ [StatusEngine] VERIFIED STATUS VIEW: ${statusMessageKey}`
+      return await this.markStatusAsRead(
+        client,
+        participant,
+        fakeTarget
       );
 
-      return true;
+    } catch (error) {
+      console.log(
+        `[StatusEngine] Direct Status fallback failed:`,
+        error?.message ||
+        error
+      );
+
+      return false;
     }
-
-    console.log(
-      `⚠️ [StatusEngine] STATUS VIEW NOT VERIFIED: ${statusMessageKey}`
-    );
-
-    return false;
-
-  } catch (error) {
-    console.error(
-      `[StatusEngine] Status view error for ${normalized}:`,
-      error?.message || error
-    );
-
-    return false;
   }
-}
+
   /*
    * ==========================================================
    * REACT TO STATUS
    * ==========================================================
    */
+
   async reactToStatus(
-  phone,
-  message,
-  emoji = '❤️'
-) {
-  const normalized =
-    this.normalizePhone(phone);
-
-  const worker =
-    this.getWorker(normalized);
-
-  if (!worker) {
-    console.log(
-      `[StatusEngine] Cannot react: worker not found for ${normalized}`
-    );
-    return false;
-  }
-
-  if (!message) {
-    console.log(
-      `[StatusEngine] Cannot react: Status message is missing for ${normalized}`
-    );
-    return false;
-  }
-
-  const statusId =
-    this.getStatusId(message);
-
-  if (!statusId) {
-    console.log(
-      `[StatusEngine] Cannot react: Status ID is missing for ${normalized}`
-    );
-    return false;
-  }
-
-  const reaction =
-    String(
-      emoji ||
-      worker.emoji ||
-      '❤️'
-    ).trim();
-
-  if (!reaction) {
-    console.log(
-      `[StatusEngine] Cannot react: reaction emoji is empty for ${normalized}`
-    );
-    return false;
-  }
-
-  console.log(
-    `[StatusEngine] Attempting reaction ${reaction} on Status ${statusId} for ${normalized}`
-  );
-
-  /*
-   * Prefer the actual whatsapp-web.js client method.
-   */
-  if (
-    worker.client &&
-    typeof worker.client.sendReaction === 'function'
+    phone,
+    message,
+    emoji = '❤️'
   ) {
-    try {
-      await worker.client.sendReaction(
-        statusId,
-        reaction
-      );
+    const normalized =
+      this.normalizePhone(phone);
 
+    const worker =
+      this.getWorker(normalized);
+
+    if (!worker) {
       console.log(
-        `[StatusEngine] Reaction request sent for Status ${statusId}: ${reaction}`
+        `[StatusEngine] Worker not found for ${normalized}`
       );
 
-      /*
-       * sendReaction() does not return a reliable boolean
-       * success value, so do not pretend that this proves
-       * WhatsApp accepted the reaction.
-       */
-      return true;
-
-    } catch (error) {
-      console.log(
-        `[StatusEngine] client.sendReaction() failed for ${normalized}:`,
-        error?.message || error
-      );
+      return false;
     }
+
+    if (!worker.client) {
+      console.log(
+        `[StatusEngine] Client unavailable for ${normalized}`
+      );
+
+      return false;
+    }
+
+    if (!message) {
+      console.log(
+        `[StatusEngine] Status message missing for ${normalized}`
+      );
+
+      return false;
+    }
+
+    if (
+      !this.isStatusMessage(
+        message
+      )
+    ) {
+      console.log(
+        `[StatusEngine] Message is not a Status for ${normalized}`
+      );
+
+      return false;
+    }
+
+    const statusId =
+      this.getStatusId(message);
+
+    if (!statusId) {
+      console.log(
+        `[StatusEngine] Status ID missing for ${normalized}`
+      );
+
+      return false;
+    }
+
+    const reaction =
+      String(
+        emoji ||
+        worker.emoji ||
+        '❤️'
+      ).trim();
+
+    if (!reaction) {
+      return false;
+    }
+
+    console.log(
+      `[StatusEngine] Reacting ${reaction} to ${statusId} for ${normalized}`
+    );
+
+    /*
+     * --------------------------------------------------------
+     * Method 1: Client.sendReaction
+     * --------------------------------------------------------
+     */
+
+    if (
+      typeof worker.client.sendReaction ===
+      'function'
+    ) {
+      try {
+        await worker.client.sendReaction(
+          statusId,
+          reaction
+        );
+
+        console.log(
+          `✅ [StatusEngine] Reaction request sent with client.sendReaction()`
+        );
+
+        return true;
+
+      } catch (error) {
+        console.log(
+          `[StatusEngine] client.sendReaction() failed:`,
+          error?.message ||
+          error
+        );
+      }
+    }
+
+    /*
+     * --------------------------------------------------------
+     * Method 2: Message.react
+     * --------------------------------------------------------
+     */
+
+    if (
+      typeof message.react ===
+      'function'
+    ) {
+      try {
+        await message.react(
+          reaction
+        );
+
+        console.log(
+          `✅ [StatusEngine] Reaction request sent with message.react()`
+        );
+
+        return true;
+
+      } catch (error) {
+        console.log(
+          `[StatusEngine] message.react() failed:`,
+          error?.message ||
+          error
+        );
+      }
+    }
+
+    console.log(
+      `❌ [StatusEngine] All reaction methods failed for ${statusId}`
+    );
+
+    return false;
   }
 
-  /*
-   * Fallback to Message.react() if the client-level method
-   * is unavailable.
-   */
-  if (
-    typeof message.react === 'function'
-  ) {
-    try {
-      await message.react(
-        reaction
-      );
-
-      console.log(
-        `[StatusEngine] Message reaction request sent for Status ${statusId}: ${reaction}`
-      );
-
-      return true;
-
-    } catch (error) {
-      console.log(
-        `[StatusEngine] message.react() failed for ${normalized}:`,
-        error?.message || error
-      );
-    }
-  }
-
-  console.log(
-    `[StatusEngine] FAILED to send reaction for Status ${statusId} (${normalized})`
-  );
-
-  return false;
-}
   /*
    * ==========================================================
    * MANUAL STATUS PROCESSING
    * ==========================================================
    */
-  async processStatuses(phone) {
+
+  async processStatuses(
+    phone
+  ) {
     const normalized =
       this.normalizePhone(phone);
+
     const worker =
       this.getWorker(normalized);
+
     if (!worker) {
       return false;
     }
+
     const client =
       worker.client;
+
     if (!client) {
       return false;
     }
+
     try {
       if (
-        typeof client.getChats !== 'function'
+        typeof client.getChats !==
+        'function'
       ) {
-        console.log(
-          `[StatusEngine] client.getChats() is unavailable for ${normalized}`
-        );
         return false;
       }
+
       const chats =
         await client.getChats();
+
       const statusChats =
         chats.filter(
           chat =>
@@ -932,28 +1247,35 @@ async viewStatus(phone, message = null) {
                 'status'
             )
         );
-      if (!statusChats.length) {
+
+      if (
+        !statusChats.length
+      ) {
         console.log(
           `[StatusEngine] No Status chat found for ${normalized}`
         );
+
         return false;
       }
-      let processed =
-        false;
+
+      let processed = false;
+
       for (
         const chat of statusChats
       ) {
+        if (
+          typeof chat.fetchMessages !==
+          'function'
+        ) {
+          continue;
+        }
+
         try {
-          if (
-            typeof chat.fetchMessages !==
-              'function'
-          ) {
-            continue;
-          }
           const messages =
             await chat.fetchMessages({
               limit: 50
             });
+
           for (
             const message of messages
           ) {
@@ -964,60 +1286,83 @@ async viewStatus(phone, message = null) {
             ) {
               continue;
             }
+
+            /*
+             * For manual processing, temporarily process
+             * the Status regardless of whether another event
+             * already saw it.
+             */
             const result =
               await this.processStatus(
                 normalized,
                 message
               );
+
             if (result) {
               processed = true;
             }
           }
+
         } catch (error) {
           console.error(
-            `[StatusEngine] Failed processing Status chat for ${normalized}:`,
-            error?.message || error
+            `[StatusEngine] Status chat processing failed:`,
+            error?.message ||
+            error
           );
         }
       }
+
       return processed;
+
     } catch (error) {
       console.error(
         `[StatusEngine] Status processing failed for ${normalized}:`,
-        error?.message || error
+        error?.message ||
+        error
       );
+
       return false;
     }
   }
+
   /*
    * ==========================================================
    * MANUAL REACTION
    * ==========================================================
    */
+
   async reactToLatestStatus(
     phone,
     emoji = '❤️'
   ) {
     const normalized =
       this.normalizePhone(phone);
+
     const worker =
       this.getWorker(normalized);
+
     if (!worker) {
       return false;
     }
+
     const client =
       worker.client;
+
     if (!client) {
       return false;
     }
+
     try {
       if (
-        typeof client.getChats !== 'function'
+        typeof client.getChats !==
+        'function'
       ) {
         return false;
       }
+
       const chats =
         await client.getChats();
+
       const statusChat =
         chats.find(
           chat =>
@@ -1029,32 +1374,39 @@ async viewStatus(phone, message = null) {
                 'status'
             )
         );
+
       if (!statusChat) {
         console.log(
           `[StatusEngine] Status chat not found for ${normalized}`
         );
+
         return false;
       }
+
       if (
         typeof statusChat.fetchMessages !==
-          'function'
+        'function'
       ) {
         return false;
       }
+
       const messages =
         await statusChat.fetchMessages({
           limit: 20
         });
+
       /*
-       * Start with the newest Status.
+       * Newest first.
        */
       for (
-        let i = messages.length - 1;
+        let i =
+          messages.length - 1;
         i >= 0;
         i--
       ) {
         const message =
           messages[i];
+
         if (
           !this.isStatusMessage(
             message
@@ -1062,30 +1414,38 @@ async viewStatus(phone, message = null) {
         ) {
           continue;
         }
+
         const success =
           await this.reactToStatus(
             normalized,
             message,
             emoji
           );
+
         if (success) {
           return true;
         }
       }
+
       return false;
+
     } catch (error) {
       console.error(
         `[StatusEngine] Manual reaction failed for ${normalized}:`,
-        error?.message || error
+        error?.message ||
+        error
       );
+
       return false;
     }
   }
+
   /*
    * ==========================================================
-   * ALIASES USED BY COMMAND ROUTER
+   * ALIASES
    * ==========================================================
    */
+
   async reactStatus(
     phone,
     emoji = '❤️'
@@ -1095,6 +1455,7 @@ async viewStatus(phone, message = null) {
       emoji
     );
   }
+
   async likeStatus(
     phone,
     emoji = '❤️'
@@ -1104,6 +1465,7 @@ async viewStatus(phone, message = null) {
       emoji
     );
   }
+
   async reactToCurrentStatus(
     phone,
     emoji = '❤️'
@@ -1113,6 +1475,7 @@ async viewStatus(phone, message = null) {
       emoji
     );
   }
+
   async checkStatuses(
     phone
   ) {
@@ -1120,6 +1483,7 @@ async viewStatus(phone, message = null) {
       phone
     );
   }
+
   async viewStatuses(
     phone
   ) {
@@ -1127,6 +1491,7 @@ async viewStatus(phone, message = null) {
       phone
     );
   }
+
   async openStatuses(
     phone
   ) {
@@ -1134,35 +1499,41 @@ async viewStatus(phone, message = null) {
       phone
     );
   }
+
   /*
    * ==========================================================
    * STOP
    * ==========================================================
    */
+
   stop(phone) {
     const normalized =
       this.normalizePhone(phone);
+
     const worker =
       this.workers.get(
         normalized
       );
+
     if (!worker) {
       return true;
     }
+
     worker.running = false;
+
     try {
       if (
         worker.client &&
         worker.messageHandler
       ) {
         /*
-         * Remove BOTH listeners because start()
-         * attaches the same handler to both events.
+         * Remove BOTH listeners.
          */
         worker.client.removeListener(
           'message',
           worker.messageHandler
         );
+
         worker.client.removeListener(
           'message_create',
           worker.messageHandler
@@ -1170,44 +1541,57 @@ async viewStatus(phone, message = null) {
       }
     } catch (error) {
       console.error(
-        `[StatusEngine] Listener removal failed for ${normalized}:`,
-        error?.message || error
+        `[StatusEngine] Listener cleanup failed for ${normalized}:`,
+        error?.message ||
+        error
       );
     }
-    worker.processedStatuses?.clear();
+
+    try {
+      worker.processedStatuses?.clear();
+    } catch (_) {}
+
     this.workers.delete(
       normalized
     );
+
     console.log(
       `[StatusEngine] Worker stopped for ${normalized}`
     );
+
     return true;
   }
+
   /*
    * ==========================================================
    * RESTART
    * ==========================================================
    */
+
   restart(
     phone,
     client,
     options = {}
   ) {
     this.stop(phone);
+
     return this.start(
       phone,
       client,
       options
     );
   }
+
   /*
    * ==========================================================
    * STATUS
    * ==========================================================
    */
+
   getStatus(phone) {
     const worker =
       this.getWorker(phone);
+
     if (!worker) {
       return {
         running: false,
@@ -1216,23 +1600,41 @@ async viewStatus(phone, message = null) {
         emoji: '❤️'
       };
     }
+
     return {
       running:
         worker.running === true,
+
       autoView:
         worker.autoView === true,
+
       autoLike:
         worker.autoLike === true,
+
       emoji:
         worker.emoji ||
-        '❤️'
+        '❤️',
+
+      lastStatusId:
+        worker.lastStatusId ||
+        null,
+
+      processedCount:
+        worker.processedStatuses?.size ||
+        0,
+
+      startedAt:
+        worker.startedAt ||
+        null
     };
   }
+
   /*
    * ==========================================================
    * STOP ALL
    * ==========================================================
    */
+
   stopAll() {
     for (
       const phone of this.workers.keys()
@@ -1241,10 +1643,12 @@ async viewStatus(phone, message = null) {
     }
   }
 }
+
 /*
  * ============================================================
  * EXPORT
  * ============================================================
  */
+
 module.exports =
   new StatusEngine();
