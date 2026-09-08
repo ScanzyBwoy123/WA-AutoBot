@@ -143,10 +143,11 @@ async function callService(
   args = []
 ) {
   const objects = [
-    context?.service,
-    context?.multiAccountService,
-    context?.accountService
-  ].filter(Boolean);
+  context?.service,
+  context?.statusEngine,
+  context?.multiAccountService,
+  context?.accountService
+].filter(Boolean);
 
   for (const object of objects) {
     for (const method of methods) {
