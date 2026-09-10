@@ -1118,7 +1118,35 @@ class MultiAccountWhatsAppService {
           ) {
             return;
           }
+      // Admin Protection
+      try {
+        const adminProtection = require('./adminProtection');
 
+        const account = multiAccountService.getAccount(phone);
+
+        const ownerJid =
+          account?.ownerJid ||
+          this.getOwnerJid(phone);
+
+        const protectionResult =
+          await adminProtection.handle({
+            client,
+            message,
+            phone,
+            ownerJid,
+            enabled: true,
+            autoBlock: true
+          });
+
+        if (protectionResult.handled) {
+          return;
+        }
+      } catch (error) {
+        console.error(
+          `[AdminProtection] Handler error for ${phone}:`,
+          error.message
+        );
+      }
           await this.cacheMessage(
             phone,
             message
