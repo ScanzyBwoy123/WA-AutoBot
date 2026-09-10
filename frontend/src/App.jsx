@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 
 import { api } from './services/api';
-
+import Deployment from './Deployment';
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [loading, setLoading] = useState(false);
