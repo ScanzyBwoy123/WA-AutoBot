@@ -1765,57 +1765,50 @@ class MultiAccountWhatsAppService {
    */
 
   async waitForPairingReady(
-    client,
-    timeoutMs = 30000
+  client,
+  timeoutMs = 30000
+) {
+  const start =
+    Date.now();
+
+  while (
+    Date.now() - start <
+    timeoutMs
   ) {
-    const start =
-      Date.now();
+    try {
+      /*
+       * The Puppeteer page exists and is still open.
+       * That is enough for whatsapp-web.js to continue
+       * its own pairing initialization.
+       */
+      if (
+        client.pupPage &&
+        !client.pupPage.isClosed()
+      ) {
+        return true;
+      }
+    } catch (_) {}
 
-    while (
-      Date.now() - start <
-      timeoutMs
-    ) {
-      try {
-        if (
-          client.pupPage &&
-          !client.pupPage.isClosed()
-        ) {
-          const pageReady =
-            await client.pupPage
-              .evaluate(
-                () =>
-                  document.readyState ===
-                    'interactive' ||
-                  document.readyState ===
-                    'complete'
-              )
-              .catch(
-                () => false
-              );
-
-          if (pageReady) {
-            return true;
-          }
-        }
-      } catch (_) {}
-
+    /*
+     * If WhatsApp has already authenticated,
+     * pairing is obviously no longer required.
+     */
+    try {
       if (
         client.info &&
         client.info.wid
       ) {
         return true;
       }
+    } catch (_) {}
 
-      await this.sleep(
-        500
-      );
-    }
-
-    throw new Error(
-      'WhatsApp Web did not become ready for pairing within 30 seconds.'
-    );
+    await this.sleep(500);
   }
 
+  throw new Error(
+    'WhatsApp Web did not initialize within 30 seconds.'
+  );
+}
 
   /*
    * ============================================================
