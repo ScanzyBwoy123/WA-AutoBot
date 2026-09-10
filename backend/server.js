@@ -14,7 +14,7 @@ require('dotenv').config();
 */
 
 const express = require('express');
-
+const cors = require('cors');
 const multiAccountService =
   require('./services/multiAccountService');
 
@@ -29,7 +29,15 @@ const multiAccountWhatsApp =
 */
 
 const app = express();
-
+app.use(cors({
+  origin: [
+    'https://phenomenal-starburst-cd9078.netlify.app',
+    'http://localhost:5173',
+    'http://localhost:3000'
+  ],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json({
   limit: '10mb'
 }));
