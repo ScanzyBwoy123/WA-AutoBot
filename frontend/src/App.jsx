@@ -917,6 +917,9 @@ WA-AutoBot/
             <CodeProjectTree />
           </div>
         )}
+                {activeTab === 'deployment' && (
+          <Deployment />
+        )}
       </main>
     </div>
   );
