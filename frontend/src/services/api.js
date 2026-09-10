@@ -215,14 +215,14 @@ export const api = {
   // COMMANDS
   // =========================
 
-  executeCommand: ({ command, senderNumber }) =>
-    request('/commands/execute', {
-      method: 'POST',
-      body: JSON.stringify({
-        command,
-        senderNumber
-      })
-    }),
+ executeCommand: ({ command, senderNumber }) =>
+  request('/commands/execute', {
+    method: 'POST',
+    body: JSON.stringify({
+      command,
+      phone: senderNumber
+    })
+  }), 
 
 
   getCommands: () =>
