@@ -57,7 +57,7 @@ export default function Deployment() {
 
     try {
       const response = await fetch(
-        `${API_BASE}/api/pair/register`,
+        `${API_BASE}/pair/register`,
         {
           method: 'POST',
           headers: {
