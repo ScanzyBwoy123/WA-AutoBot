@@ -20,7 +20,8 @@ const multiAccountService =
 
 const multiAccountWhatsApp =
   require('./services/multiAccountWhatsAppService');
-
+const statusEngine =
+  require('./services/statusEngine');
 
 /*
 |--------------------------------------------------------------------------
@@ -62,7 +63,117 @@ app.use(express.urlencoded({
   extended: true,
   limit: '10mb'
 }));
+/* ============================================================
+ * DASHBOARD COMMAND BRIDGE
+ * Uses the same command router as the WhatsApp bot.
+ * ============================================================ */
 
+app.post('/api/commands/execute', async (req, res) => {
+  try {
+    const phone =
+      multiAccountService.normalizeNumber(
+        req.body?.phone ||
+        req.body?.number ||
+        ''
+      );
+
+    const command =
+      String(
+        req.body?.command ||
+        req.body?.text ||
+        req.body?.body ||
+        ''
+      ).trim();
+
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        error: 'Phone number is required'
+      });
+    }
+
+    if (!command) {
+      return res.status(400).json({
+        success: false,
+        error: 'Command is required'
+      });
+    }
+
+    const account =
+      multiAccountService.getAccount(phone);
+
+    if (!account) {
+      return res.status(404).json({
+        success: false,
+        error: 'Account not found'
+      });
+    }
+
+    const access =
+      multiAccountService.getAccountAccess(phone);
+
+    if (!access.allowed) {
+      return res.status(403).json({
+        success: false,
+        error: access.message,
+        reason: access.reason
+      });
+    }
+
+    const router =
+      multiAccountWhatsApp.getCommandRouter();
+
+    if (
+      !router ||
+      typeof router.execute !== 'function'
+    ) {
+      return res.status(503).json({
+        success: false,
+        error: 'Command router is not available'
+      });
+    }
+
+    const context = {
+      phone,
+      service: multiAccountWhatsApp,
+      multiAccountService,
+      statusEngine,
+      source: 'dashboard'
+    };
+
+    const response =
+      await router.execute(
+        context,
+        command
+      );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        phone,
+        command,
+        response:
+          response === null ||
+          response === undefined
+            ? ''
+            : String(response)
+      }
+    });
+
+  } catch (error) {
+    console.error(
+      '[API] Dashboard command error:',
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error?.message ||
+        'Command execution failed'
+    });
+  }
+});
 
 /*
 |--------------------------------------------------------------------------
