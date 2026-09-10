@@ -1428,54 +1428,204 @@ class MultiAccountWhatsAppService {
      * ----------------------------------------------------------
      */
 
-    client.on(
-      'disconnected',
-      reason => {
-        console.log(
-          `📴 Customer WhatsApp disconnected: ${phone}`,
-          reason
-        );
+    client.on('disconnected', reason => {
+  const normalized =
+    this.normalizeNumber(phone);
 
-        this.connecting.delete(
-          phone
-        );
+  console.log(
+    `📴 Customer WhatsApp disconnected: ${normalized}`,
+    reason
+  );
 
-        this.pairingCodes.delete(
-          phone
-        );
+  this.connecting.delete(normalized);
+  this.pairingCodes.delete(normalized);
 
-        this.errors.set(
-          phone,
-          String(
-            reason ||
-            'Disconnected'
-          )
-        );
+  this.errors.set(
+    normalized,
+    String(reason || 'Disconnected')
+  );
 
-        this.stopStatusMonitor(
-          phone
-        );
+  this.stopStatusMonitor(
+    normalized
+  );
 
-        this.unregisterMediaClient(
-          phone
+  this.unregisterMediaClient(
+    normalized
+  );
+
+  try {
+    multiAccountService.setConnected(
+      normalized,
+      false
+    );
+
+    multiAccountService.clearPairingCode(
+      normalized
+    );
+  } catch (_) {}
+
+  this.clients.delete(
+    normalized
+  );
+
+  /*
+   * ============================================================
+   * AUTOMATIC RECONNECT
+   * ============================================================
+   *
+   * WhatsApp can disconnect the linked session temporarily.
+   * Keep the account alive and automatically try to reconnect.
+   *
+   * We reuse startAccount() so the existing pairing/session
+   * architecture remains unchanged.
+   */
+
+  if (
+    this.retryTimers.has(normalized)
+  ) {
+    console.log(
+      `[MultiAccountWhatsApp] Reconnect already scheduled for ${normalized}`
+    );
+
+    return;
+  }
+
+  const account =
+    multiAccountService.getAccount(
+      normalized
+    );
+
+  if (!account) {
+    console.log(
+      `[MultiAccountWhatsApp] No account found for ${normalized}; reconnect cancelled.`
+    );
+
+    return;
+  }
+
+  if (
+    typeof this.retryAttempts ===
+    'undefined'
+  ) {
+    this.retryAttempts = new Map();
+  }
+
+  const attempts =
+    this.retryAttempts.get(
+      normalized
+    ) || 0;
+
+  if (
+    attempts >= this.maxRetries
+  ) {
+    console.log(
+      `[MultiAccountWhatsApp] Maximum reconnect attempts reached for ${normalized}`
+    );
+
+    return;
+  }
+
+  const nextAttempt =
+    attempts + 1;
+
+  this.retryAttempts.set(
+    normalized,
+    nextAttempt
+  );
+
+  const delay =
+    Math.min(
+      30000 * nextAttempt,
+      120000
+    );
+
+  console.log(
+    `[MultiAccountWhatsApp] Reconnecting ${normalized} in ${Math.round(delay / 1000)} seconds (attempt ${nextAttempt}/${this.maxRetries})`
+  );
+
+  const timer =
+    setTimeout(
+      async () => {
+        this.retryTimers.delete(
+          normalized
         );
 
         try {
-          multiAccountService.setConnected(
-            phone,
-            false
+          const currentAccount =
+            multiAccountService.getAccount(
+              normalized
+            );
+
+          if (!currentAccount) {
+            console.log(
+              `[MultiAccountWhatsApp] Account ${normalized} no longer exists.`
+            );
+
+            this.retryAttempts.delete(
+              normalized
+            );
+
+            return;
+          }
+
+          const access =
+            multiAccountService.getAccountAccess(
+              normalized
+            );
+
+          if (
+            !access ||
+            access.active !== true
+          ) {
+            console.log(
+              `[MultiAccountWhatsApp] Account ${normalized} is not active. Reconnect cancelled.`
+            );
+
+            this.retryAttempts.delete(
+              normalized
+            );
+
+            return;
+          }
+
+          console.log(
+            `🔄 [MultiAccountWhatsApp] Attempting automatic reconnect for ${normalized}...`
           );
 
-          multiAccountService.clearPairingCode(
-            phone
+          await this.startAccount(
+            normalized
           );
-        } catch (_) {}
 
-        this.clients.delete(
-          phone
-        );
-      }
+          /*
+           * startAccount() succeeded.
+           * The ready event will start StatusEngine again.
+           */
+          this.retryAttempts.delete(
+            normalized
+          );
+
+          console.log(
+            `✅ [MultiAccountWhatsApp] Automatic reconnect successful for ${normalized}`
+          );
+        } catch (error) {
+          console.error(
+            `❌ [MultiAccountWhatsApp] Automatic reconnect failed for ${normalized}:`,
+            error.message
+          );
+
+          /*
+           * Give the next disconnect/retry cycle a chance.
+           */
+        }
+      },
+      delay
     );
+
+  this.retryTimers.set(
+    normalized,
+    timer
+  );
+});
 
 
     /*
