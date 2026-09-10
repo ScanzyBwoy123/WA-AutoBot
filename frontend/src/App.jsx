@@ -378,7 +378,8 @@ WA-AutoBot/
     ['commands', Terminal, 'Commands Manager'],
     ['media', HardDrive, 'Saved Media Vault'],
     ['settings', Sliders, 'Bot Settings'],
-    ['architecture', Folder, 'Project Architecture']
+    ['architecture', Folder, 'Project Architecture'],
+    ['deployment', Rocket, 'Deployment']
   ];
 
   return (
