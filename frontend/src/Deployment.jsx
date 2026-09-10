@@ -1,842 +1,824 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
   Circle,
+  Cloud,
   Copy,
+  ExternalLink,
   Eye,
   Heart,
+  Link2,
   Loader2,
+  Lock,
   MessageCircle,
-  Play,
+  Phone,
   Rocket,
   ShieldCheck,
+  Sparkles,
   Smartphone,
   Zap,
-  Wifi,
-  Server,
 } from 'lucide-react';
-
 const API_BASE =
-  import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
-
+  import.meta.env.VITE_API_URL ||
+  'https://wa-autobot.onrender.com/api';
+const DEFAULT_REACTION = '❤️';
+function normalizePhone(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+function formatPhone(value) {
+  const clean = normalizePhone(value);
+  if (!clean) return '';
+  if (clean.startsWith('233') && clean.length === 12) {
+    return `+${clean}`;
+  }
+  return `+${clean}`;
+}
+async function apiRequest(url, options = {}) {
+  const response = await fetch(url, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(
+      `Server returned an invalid response (${response.status}).`
+    );
+  }
+  if (!response.ok || data?.success === false) {
+    throw new Error(
+      data?.message ||
+        data?.error ||
+        `Request failed with status ${response.status}.`
+    );
+  }
+  return data;
+}
 export default function Deployment() {
-  const [phone, setPhone] = useState(
-    () => localStorage.getItem('wa_autobot_phone') || ''
-  );
-
+  const savedPhone =
+    typeof window !== 'undefined'
+      ? localStorage.getItem('wa_autobot_phone') || ''
+      : '';
+  const [phone, setPhone] = useState(savedPhone);
+  const [pairingCode, setPairingCode] = useState('');
   const [status, setStatus] = useState('idle');
   const [message, setMessage] = useState('');
-  const [pairingCode, setPairingCode] = useState('');
+  const [connected, setConnected] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [whatsappConnected, setWhatsappConnected] = useState(false);
-  const [account, setAccount] = useState(null);
-
-  const pollingRef = useRef(null);
-  const pairingPollingRef = useRef(null);
-
-  const cleanPhone = String(phone || '').replace(/\D/g, '');
-
-  const stopPolling = () => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-
-    if (pairingPollingRef.current) {
-      clearInterval(pairingPollingRef.current);
-      pairingPollingRef.current = null;
-    }
-  };
-
+  const [deploying, setDeploying] = useState(false);
+  const [features, setFeatures] = useState({
+    autoView: true,
+    autoLike: true,
+    antiDelete: true,
+  });
+  const cleanPhone = useMemo(
+    () => normalizePhone(phone),
+    [phone]
+  );
+  const displayPhone = useMemo(
+    () => formatPhone(cleanPhone),
+    [cleanPhone]
+  );
   useEffect(() => {
-    return () => {
-      stopPolling();
-    };
-  }, []);
-
-  const checkConnectionStatus = async targetPhone => {
-    const clean = String(targetPhone || '').replace(/\D/g, '');
-
-    if (!clean) return;
-
-    try {
-      const response = await fetch(
-        `${API_BASE}/pair/status/${clean}`
-      );
-
-      const result = await response.json();
-
-      if (!response.ok || result?.success !== true) {
-        return;
-      }
-
-      const data = result?.data || {};
-      const accountData = data?.account || {};
-      const whatsappData = data?.whatsapp || {};
-
-      setAccount(accountData);
-
-      const connected =
-        accountData?.connected === true ||
-        whatsappData?.connected === true ||
-        whatsappData?.status === 'connected' ||
-        whatsappData?.state === 'connected';
-
-      setWhatsappConnected(connected);
-
-      if (connected) {
-        setStatus('online');
-        setMessage(
-          'WhatsApp connected successfully. WA-AutoBot is online.'
+    if (!cleanPhone) return;
+    let cancelled = false;
+    let timer = null;
+    const checkStatus = async () => {
+      try {
+        const result = await apiRequest(
+          `${API_BASE}/pair/status/${cleanPhone}`
         );
-
-        if (pairingPollingRef.current) {
-          clearInterval(pairingPollingRef.current);
-          pairingPollingRef.current = null;
+        if (cancelled) return;
+        const whatsapp =
+          result?.data?.whatsapp ||
+          result?.whatsapp ||
+          {};
+        const account =
+          result?.data?.account ||
+          result?.account ||
+          {};
+        const isConnected =
+          whatsapp?.connected === true ||
+          whatsapp?.status === 'connected' ||
+          account?.connected === true;
+        if (isConnected) {
+          setConnected(true);
+          setStatus('connected');
+          setMessage('WhatsApp is connected to WA-AutoBot.');
         }
+      } catch {
+        // Do not show a noisy error during background polling.
       }
-    } catch (error) {
-      console.error(
-        '[Deployment] Status check error:',
-        error
-      );
-    }
-  };
-
-  const startStatusPolling = targetPhone => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-    }
-
-    const clean = String(targetPhone || '').replace(/\D/g, '');
-
-    if (!clean) return;
-
-    checkConnectionStatus(clean);
-
-    pollingRef.current = setInterval(() => {
-      checkConnectionStatus(clean);
-    }, 3000);
-  };
-
+      if (!cancelled && !connected) {
+        timer = setTimeout(checkStatus, 5000);
+      }
+    };
+    checkStatus();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [cleanPhone, connected]);
   const startPairing = async () => {
     if (!cleanPhone) {
       setStatus('error');
-      setMessage(
-        'Please enter your WhatsApp phone number first.'
-      );
+      setMessage('Enter your WhatsApp phone number first.');
       return;
     }
-
-    if (cleanPhone.length < 8) {
+    if (cleanPhone.length < 10) {
       setStatus('error');
-      setMessage(
-        'Please enter a valid WhatsApp phone number.'
-      );
+      setMessage('Enter a valid WhatsApp phone number.');
       return;
     }
-
-    stopPolling();
-
-    setStatus('registering');
-    setMessage(
-      'Connecting to the WA-AutoBot pairing service...'
-    );
-
+    setStatus('loading');
+    setMessage('Connecting to WA-AutoBot...');
     setPairingCode('');
-    setWhatsappConnected(false);
-
+    setConnected(false);
     try {
-      const response = await fetch(
+      const result = await apiRequest(
         `${API_BASE}/pair/register`,
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
           body: JSON.stringify({
             phone: cleanPhone,
           }),
         }
       );
-
-      const result = await response.json();
-
-      if (!response.ok || result?.success !== true) {
-        throw new Error(
-          result?.message ||
-            'Unable to start WhatsApp pairing.'
-        );
-      }
-
       localStorage.setItem(
         'wa_autobot_phone',
         cleanPhone
       );
-
-      setPhone(cleanPhone);
-      setAccount(result?.data || null);
-      setStatus('pairing');
-
       setMessage(
-        'Pairing has started. Your WhatsApp pairing code will appear below.'
+        result?.message ||
+          'Pairing session created. Getting your pairing code...'
       );
-
-      pollPairingCode(cleanPhone);
-      startStatusPolling(cleanPhone);
+      await pollPairingCode(cleanPhone);
     } catch (error) {
-      console.error(
-        '[Deployment] Pairing registration error:',
-        error
-      );
-
       setStatus('error');
       setMessage(
         error?.message ||
-          'Unable to start WhatsApp pairing.'
+          'Unable to connect to the WA-AutoBot server.'
       );
     }
   };
-
-  const pollPairingCode = targetPhone => {
-    const clean = String(targetPhone || '').replace(/\D/g, '');
-
-    if (!clean) return;
-
+  const pollPairingCode = async number => {
     let attempts = 0;
-    const maxAttempts = 100;
-
+    const maxAttempts = 24;
+    setStatus('loading');
     const poll = async () => {
       attempts += 1;
-
       try {
-        const response = await fetch(
-          `${API_BASE}/pair/pairing-code/${clean}`
+        const result = await apiRequest(
+          `${API_BASE}/pair/pairing-code/${number}`
         );
-
-        const result = await response.json();
-
-        if (!response.ok || result?.success !== true) {
-          if (attempts >= maxAttempts) {
-            setStatus('error');
-            setMessage(
-              result?.message ||
-                'Unable to retrieve the pairing code.'
-            );
-          }
-
+        const data = result?.data || {};
+        const code = String(
+          data?.pairingCode || ''
+        ).trim();
+        if (code) {
+          setPairingCode(code);
+          setStatus('code');
+          setMessage(
+            'Your pairing code is ready. Open WhatsApp and link this device.'
+          );
           return;
         }
-
-        const data = result?.data || {};
-        const code = data?.pairingCode;
-
-        if (code) {
-          setPairingCode(String(code));
-          setStatus('pairing');
-
-          setMessage(
-            'Pairing code ready. Enter this code in WhatsApp Linked Devices.'
-          );
-        }
-      } catch (error) {
-        console.error(
-          '[Deployment] Pairing code error:',
-          error
-        );
-
         if (attempts >= maxAttempts) {
           setStatus('error');
           setMessage(
-            'Unable to contact the pairing service.'
+            'The pairing code took too long to become available. Please try again.'
           );
+          return;
+        }
+      } catch (error) {
+        if (attempts >= maxAttempts) {
+          setStatus('error');
+          setMessage(
+            error?.message ||
+              'Unable to load the pairing code.'
+          );
+          return;
         }
       }
+      setTimeout(poll, 2500);
     };
-
     poll();
-
-    pairingPollingRef.current = setInterval(() => {
-      if (
-        attempts >= maxAttempts ||
-        whatsappConnected
-      ) {
-        clearInterval(pairingPollingRef.current);
-        pairingPollingRef.current = null;
-        return;
-      }
-
-      poll();
-    }, 3000);
   };
-
   const deployBot = async () => {
     if (!cleanPhone) {
       setStatus('error');
       setMessage(
-        'Enter your WhatsApp phone number before starting the bot.'
+        'Enter and pair your WhatsApp number before deploying.'
       );
       return;
     }
-
-    localStorage.setItem(
-      'wa_autobot_phone',
-      cleanPhone
-    );
-
-    setStatus('deploying');
-    setMessage(
-      'Starting your WA-AutoBot account on the server...'
-    );
-
+    setDeploying(true);
+    setMessage('Starting your WA-AutoBot account...');
     try {
-      const response = await fetch(
+      await apiRequest(
         `${API_BASE}/accounts/${cleanPhone}/start`,
         {
           method: 'POST',
         }
       );
-
-      const result = await response.json();
-
-      if (!response.ok || result?.success !== true) {
-        throw new Error(
-          result?.message ||
-            'Unable to start the bot.'
-        );
-      }
-
-      setStatus('pairing');
-
+      setStatus('loading');
       setMessage(
-        'Bot started. Waiting for WhatsApp connection...'
+        'WA-AutoBot is starting. Waiting for WhatsApp connection...'
       );
-
-      startStatusPolling(cleanPhone);
-      pollPairingCode(cleanPhone);
+      await pollConnection(cleanPhone);
     } catch (error) {
-      console.error(
-        '[Deployment] Deployment error:',
-        error
-      );
-
+      setDeploying(false);
       setStatus('error');
       setMessage(
         error?.message ||
-          'Unable to start WA-AutoBot.'
+          'Unable to start the bot.'
       );
     }
   };
-
+  const pollConnection = async number => {
+    let attempts = 0;
+    const maxAttempts = 30;
+    const poll = async () => {
+      attempts += 1;
+      try {
+        const result = await apiRequest(
+          `${API_BASE}/pair/status/${number}`
+        );
+        const whatsapp =
+          result?.data?.whatsapp ||
+          result?.whatsapp ||
+          {};
+        const account =
+          result?.data?.account ||
+          result?.account ||
+          {};
+        const isConnected =
+          whatsapp?.connected === true ||
+          whatsapp?.status === 'connected' ||
+          account?.connected === true;
+        if (isConnected) {
+          setConnected(true);
+          setDeploying(false);
+          setStatus('connected');
+          setMessage(
+            'Connected! WA-AutoBot is now online.'
+          );
+          return;
+        }
+        if (attempts >= maxAttempts) {
+          setDeploying(false);
+          setStatus('code');
+          setMessage(
+            'The bot is ready. Finish linking the device in WhatsApp.'
+          );
+          return;
+        }
+      } catch {
+        if (attempts >= maxAttempts) {
+          setDeploying(false);
+          setStatus('code');
+          setMessage(
+            'Finish linking the device in WhatsApp, then check the connection.'
+          );
+          return;
+        }
+      }
+      setTimeout(poll, 3000);
+    };
+    poll();
+  };
   const copyPairingCode = async () => {
     if (!pairingCode) return;
-
     try {
-      await navigator.clipboard.writeText(
-        pairingCode
-      );
-
+      await navigator.clipboard.writeText(pairingCode);
       setCopied(true);
-
       setTimeout(() => {
         setCopied(false);
-      }, 2000);
-    } catch (error) {
-      console.error(
-        '[Deployment] Copy error:',
-        error
+      }, 1800);
+    } catch {
+      setMessage(
+        'Copy is not available on this device. Long-press the code instead.'
       );
     }
   };
-
-  const getStatusText = () => {
-    if (
-      whatsappConnected ||
-      status === 'online'
-    ) {
-      return 'ONLINE';
-    }
-
-    if (
-      status === 'pairing' ||
-      status === 'registering' ||
-      status === 'deploying'
-    ) {
-      return 'CONNECTING';
-    }
-
-    if (status === 'error') {
-      return 'ERROR';
-    }
-
-    return 'READY';
+  const resetPairing = () => {
+    setPairingCode('');
+    setConnected(false);
+    setStatus('idle');
+    setMessage('');
+    setDeploying(false);
   };
-
-  const statusText = getStatusText();
-
-  const isBusy =
-    status === 'registering' ||
-    status === 'deploying';
-
+  const toggleFeature = key => {
+    setFeatures(previous => ({
+      ...previous,
+      [key]: !previous[key],
+    }));
+  };
+  const steps = [
+    {
+      number: 1,
+      title: 'Enter WhatsApp',
+      description: 'Use the number you want to connect.',
+      complete: Boolean(cleanPhone),
+    },
+    {
+      number: 2,
+      title: 'Get pairing code',
+      description: 'Generate your secure WhatsApp linking code.',
+      complete: Boolean(pairingCode),
+    },
+    {
+      number: 3,
+      title: 'Link device',
+      description: 'Enter the code inside WhatsApp Linked Devices.',
+      complete: connected,
+    },
+    {
+      number: 4,
+      title: 'Go online',
+      description: 'WA-AutoBot starts your configured bot.',
+      complete: connected,
+    },
+  ];
   return (
-    <div className="relative min-h-full overflow-hidden rounded-3xl bg-slate-950 p-4 text-white sm:p-6 lg:p-8">
-      {/* Background lighting */}
-      <div className="pointer-events-none absolute -left-32 -top-32 h-80 w-80 rounded-full bg-blue-600/20 blur-3xl" />
-
-      <div className="pointer-events-none absolute -right-32 top-20 h-96 w-96 rounded-full bg-cyan-500/10 blur-3xl" />
-
-      <div className="pointer-events-none absolute bottom-0 left-1/3 h-80 w-80 rounded-full bg-indigo-600/10 blur-3xl" />
-
-      <div className="relative z-10 space-y-6">
-        {/* HERO */}
-        <div className="overflow-hidden rounded-3xl border border-blue-400/20 bg-gradient-to-br from-blue-950 via-slate-900 to-slate-950 p-6 shadow-2xl shadow-blue-950/30 sm:p-8">
-          <div className="flex flex-col gap-7 lg:flex-row lg:items-center lg:justify-between">
-            <div className="max-w-2xl">
-              <div className="mb-4 flex items-center gap-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-500/20 ring-1 ring-blue-400/30">
-                  <Rocket
-                    size={24}
-                    className="text-blue-300"
-                  />
-                </div>
-
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.25em] text-blue-300">
-                    WA-AutoBot
-                  </p>
-
-                  <p className="text-xs text-slate-400">
-                    Deployment Center
-                  </p>
-                </div>
-              </div>
-
-              <h2 className="text-3xl font-black tracking-tight sm:text-4xl">
-                Deploy your WhatsApp bot
-              </h2>
-
-              <p className="mt-3 max-w-xl text-sm leading-6 text-slate-300">
-                Connect your WhatsApp account, receive your
-                pairing code and bring WA-AutoBot online.
+    <div className="relative min-h-screen overflow-hidden bg-slate-950 text-white">
+      {/* Premium background */}
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute -left-32 -top-32 h-96 w-96 rounded-full bg-blue-600/20 blur-3xl" />
+        <div className="absolute right-0 top-20 h-[32rem] w-[32rem] rounded-full bg-violet-600/20 blur-3xl" />
+        <div className="absolute bottom-0 left-1/3 h-96 w-96 rounded-full bg-cyan-500/10 blur-3xl" />
+        <div
+          className="absolute inset-0 opacity-20"
+          style={{
+            backgroundImage:
+              'linear-gradient(rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.08) 1px, transparent 1px)',
+            backgroundSize: '42px 42px',
+          }}
+        />
+      </div>
+      <div className="relative z-10 mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        {/* Header */}
+        <div className="mb-8 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-4">
+            <div className="relative flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-violet-600 shadow-2xl shadow-blue-500/30">
+              <MessageCircle size={28} />
+              <Sparkles
+                size={15}
+                className="absolute -right-1 -top-1 text-cyan-200"
+              />
+            </div>
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-[0.25em] text-blue-300">
+                WA-AutoBot
+              </p>
+              <h1 className="text-2xl font-black tracking-tight sm:text-3xl">
+                Bot Deployment Center
+              </h1>
+              <p className="mt-1 text-sm text-slate-400">
+                Connect WhatsApp, configure your bot and bring it online.
               </p>
             </div>
-
-            {/* Status */}
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur-xl lg:min-w-[190px]">
-              <div className="flex items-center gap-3">
-                <div
-                  className={`h-3 w-3 rounded-full ${
-                    whatsappConnected
-                      ? 'animate-pulse bg-emerald-400 shadow-lg shadow-emerald-400/70'
-                      : status === 'error'
-                      ? 'bg-red-400'
-                      : 'animate-pulse bg-blue-400 shadow-lg shadow-blue-400/70'
-                  }`}
-                />
-
-                <span className="text-xs font-black tracking-[0.2em] text-slate-300">
-                  {statusText}
-                </span>
-              </div>
-
-              <div className="mt-4 text-2xl font-black">
-                {whatsappConnected
-                  ? 'Connected'
-                  : status === 'pairing'
-                  ? 'Pairing'
-                  : 'Ready'}
-              </div>
-            </div>
+          </div>
+          <div className="flex w-fit items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-4 py-2 text-sm text-emerald-300">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+            48-hour free trial
           </div>
         </div>
-
-        {/* MAIN GRID */}
-        <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-          {/* PHONE CARD */}
-          <div className="rounded-3xl border border-white/10 bg-white/[0.045] p-6 shadow-xl backdrop-blur-xl sm:p-7">
-            <div className="mb-6 flex items-start gap-4">
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-500/15 ring-1 ring-blue-400/20">
-                <Smartphone
-                  size={23}
-                  className="text-blue-300"
-                />
-              </div>
-
-              <div>
-                <h3 className="text-xl font-bold">
-                  WhatsApp Account
-                </h3>
-
-                <p className="mt-1 text-sm text-slate-400">
-                  Enter the number that will run your bot.
-                </p>
-              </div>
-            </div>
-
-            <label className="mb-3 block text-sm font-bold text-slate-200">
-              WhatsApp Phone Number
-            </label>
-
-            {/* VERY VISIBLE PHONE INPUT */}
-            <div className="rounded-2xl border border-blue-400/30 bg-slate-950/80 p-2 shadow-inner shadow-blue-950/30">
-              <div className="flex items-center gap-3 rounded-xl bg-white/[0.04] px-4">
-                <span className="text-lg text-blue-300">
-                  +
-                </span>
-
-                <input
-                  type="tel"
-                  value={phone}
-                  onChange={event =>
-                    setPhone(event.target.value)
-                  }
-                  placeholder="233554279349"
-                  disabled={isBusy}
-                  className="w-full bg-transparent py-4 text-lg font-semibold tracking-wide text-white outline-none placeholder:text-slate-600 disabled:cursor-not-allowed"
-                />
-              </div>
-            </div>
-
-            <p className="mt-3 text-xs text-slate-500">
-              Example: 233554279349 — use your country
-              code and do not include spaces.
-            </p>
-
-            <button
-              type="button"
-              onClick={startPairing}
-              disabled={!cleanPhone || isBusy}
-              className="mt-6 flex w-full items-center justify-center gap-3 rounded-2xl bg-gradient-to-r from-blue-600 to-cyan-500 px-5 py-4 text-sm font-black shadow-lg shadow-blue-950/50 transition hover:-translate-y-0.5 hover:from-blue-500 hover:to-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {status === 'registering' ? (
-                <>
-                  <Loader2
-                    size={19}
-                    className="animate-spin"
-                  />
-                  STARTING PAIRING...
-                </>
-              ) : (
-                <>
-                  <MessageCircle size={19} />
-                  GET WHATSAPP PAIRING CODE
-                </>
-              )}
-            </button>
-
-            {/* Message */}
-            {message && (
-              <div
-                className={`mt-5 rounded-2xl border p-4 ${
-                  status === 'error'
-                    ? 'border-red-400/20 bg-red-500/10 text-red-200'
-                    : whatsappConnected
-                    ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-200'
-                    : 'border-blue-400/20 bg-blue-500/10 text-blue-200'
-                }`}
-              >
-                <div className="flex gap-3">
-                  {whatsappConnected ? (
-                    <CheckCircle2
-                      size={18}
-                      className="mt-0.5 shrink-0"
+        {/* Main grid */}
+        <div className="grid gap-6 xl:grid-cols-[1.5fr_0.8fr]">
+          {/* Left */}
+          <div className="space-y-6">
+            {/* Hero card */}
+            <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl sm:p-8">
+              <div className="absolute right-0 top-0 h-48 w-48 rounded-full bg-blue-500/20 blur-3xl" />
+              <div className="relative">
+                <div className="mb-6 flex items-start justify-between gap-4">
+                  <div>
+                    <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-blue-400/20 bg-blue-400/10 px-3 py-1.5 text-xs font-semibold text-blue-300">
+                      <Rocket size={14} />
+                      One-click deployment
+                    </div>
+                    <h2 className="text-2xl font-bold sm:text-3xl">
+                      Connect your WhatsApp
+                    </h2>
+                    <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
+                      Enter your WhatsApp number to generate a real pairing
+                      code and connect this device to WA-AutoBot.
+                    </p>
+                  </div>
+                  <div className="hidden rounded-2xl border border-white/10 bg-white/5 p-3 sm:block">
+                    <Smartphone
+                      size={26}
+                      className="text-blue-300"
                     />
-                  ) : (
-                    <Wifi
-                      size={18}
-                      className="mt-0.5 shrink-0"
-                    />
-                  )}
-
-                  <p className="text-sm leading-5">
+                  </div>
+                </div>
+                {/* Phone input */}
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    WhatsApp phone number
+                  </label>
+                  <div className="flex flex-col gap-3 sm:flex-row">
+                    <div className="flex flex-1 items-center gap-3 rounded-xl border border-white/10 bg-white/[0.05] px-4 py-3">
+                      <Phone
+                        size={19}
+                        className="shrink-0 text-blue-300"
+                      />
+                      <input
+                        value={phone}
+                        onChange={event => {
+                          setPhone(event.target.value);
+                          resetPairing();
+                        }}
+                        placeholder="233554279349"
+                        inputMode="numeric"
+                        disabled={status === 'loading' || deploying}
+                        className="w-full bg-transparent text-base font-semibold text-white outline-none placeholder:text-slate-600"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={startPairing}
+                      disabled={
+                        status === 'loading' ||
+                        deploying ||
+                        !cleanPhone
+                      }
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-violet-600 px-6 py-3 font-bold shadow-lg shadow-blue-500/20 transition hover:scale-[1.01] hover:from-blue-400 hover:to-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {status === 'loading' ? (
+                        <>
+                          <Loader2
+                            size={18}
+                            className="animate-spin"
+                          />
+                          Connecting...
+                        </>
+                      ) : (
+                        <>
+                          <Link2 size={18} />
+                          Get Pairing Code
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+                    <Lock size={13} />
+                    Your number is used only for this bot connection.
+                  </div>
+                </div>
+                {/* Status message */}
+                {message && (
+                  <div
+                    className={`mt-4 rounded-2xl border p-4 text-sm ${
+                      status === 'error'
+                        ? 'border-red-400/20 bg-red-400/10 text-red-200'
+                        : status === 'connected'
+                        ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-200'
+                        : 'border-blue-400/20 bg-blue-400/10 text-blue-200'
+                    }`}
+                  >
                     {message}
-                  </p>
-                </div>
+                  </div>
+                )}
+                {/* Pairing code */}
+                {pairingCode && (
+                  <div className="mt-5 overflow-hidden rounded-3xl border border-cyan-400/20 bg-gradient-to-br from-cyan-400/[0.08] to-blue-500/[0.08] p-5">
+                    <div className="mb-4 flex items-center justify-between">
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-300">
+                          Your WhatsApp pairing code
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Enter this code in WhatsApp → Linked Devices.
+                        </p>
+                      </div>
+                      <Zap
+                        size={20}
+                        className="text-cyan-300"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                      <div className="flex flex-1 items-center justify-center rounded-2xl border border-white/10 bg-black/30 px-5 py-5">
+                        <span className="select-all font-mono text-3xl font-black tracking-[0.35em] text-white sm:text-4xl">
+                          {pairingCode}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={copyPairingCode}
+                        className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/10 px-5 py-4 font-semibold transition hover:bg-white/15"
+                      >
+                        {copied ? (
+                          <>
+                            <CheckCircle2
+                              size={18}
+                              className="text-emerald-300"
+                            />
+                            Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy size={18} />
+                            Copy Code
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-
-          {/* FEATURES */}
-          <div className="rounded-3xl border border-white/10 bg-white/[0.045] p-6 shadow-xl backdrop-blur-xl sm:p-7">
-            <div className="mb-6">
-              <div className="mb-2 flex items-center gap-2">
-                <Zap
-                  size={18}
-                  className="text-cyan-300"
+            </section>
+            {/* Configuration */}
+            <section className="rounded-3xl border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl">
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-violet-300">
+                    Bot configuration
+                  </p>
+                  <h2 className="mt-1 text-xl font-bold">
+                    Features
+                  </h2>
+                </div>
+                <ShieldCheck
+                  size={24}
+                  className="text-violet-300"
                 />
-
-                <span className="text-xs font-black uppercase tracking-[0.2em] text-cyan-300">
-                  Active Configuration
-                </span>
               </div>
-
-              <h3 className="text-xl font-bold">
-                Bot Features
-              </h3>
-            </div>
-
-            <div className="space-y-3">
-              <Feature
-                icon={<Eye size={19} />}
-                title="Auto View Status"
-                description="Automatically view WhatsApp statuses."
-                enabled
-              />
-
-              <Feature
-                icon={<Heart size={19} />}
-                title="Auto Like Status"
-                description="Automatically react to statuses."
-                enabled
-              />
-
-              <Feature
-                icon={<ShieldCheck size={19} />}
-                title="Anti-Delete"
-                description="Keep records of deleted messages."
-                enabled
-              />
-
-              <Feature
-                icon={<ShieldCheck size={19} />}
-                title="Admin Protection"
-                description="Temporarily disabled during testing."
-                enabled={false}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* PAIRING CODE */}
-        {pairingCode && !whatsappConnected && (
-          <div className="relative overflow-hidden rounded-3xl border border-cyan-400/25 bg-gradient-to-br from-cyan-950/50 via-blue-950/40 to-slate-950 p-6 shadow-2xl shadow-cyan-950/20 sm:p-8">
-            <div className="pointer-events-none absolute -right-20 -top-20 h-56 w-56 rounded-full bg-cyan-400/10 blur-3xl" />
-
-            <div className="relative">
-              <div className="mb-6 flex items-center gap-4">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-cyan-400/10 ring-1 ring-cyan-300/20">
-                  <MessageCircle
-                    size={23}
-                    className="text-cyan-300"
-                  />
-                </div>
-
-                <div>
-                  <p className="text-xs font-black uppercase tracking-[0.2em] text-cyan-300">
-                    Pairing Required
-                  </p>
-
-                  <h3 className="text-xl font-bold">
-                    Your WhatsApp Pairing Code
-                  </h3>
-                </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <FeatureCard
+                  icon={<Eye size={20} />}
+                  title="Auto View"
+                  description="Automatically view statuses."
+                  enabled={features.autoView}
+                  onClick={() => toggleFeature('autoView')}
+                />
+                <FeatureCard
+                  icon={<Heart size={20} />}
+                  title="Auto Like"
+                  description={`React with ${DEFAULT_REACTION}`}
+                  enabled={features.autoLike}
+                  onClick={() => toggleFeature('autoLike')}
+                />
+                <FeatureCard
+                  icon={<ShieldCheck size={20} />}
+                  title="Anti-Delete"
+                  description="Protect deleted messages."
+                  enabled={features.antiDelete}
+                  onClick={() => toggleFeature('antiDelete')}
+                />
               </div>
-
-              <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+            </section>
+            {/* Deploy */}
+            <section className="relative overflow-hidden rounded-3xl border border-blue-400/20 bg-gradient-to-r from-blue-600/20 via-violet-600/15 to-cyan-500/10 p-6 shadow-2xl sm:p-8">
+              <div className="absolute -right-20 -top-20 h-64 w-64 rounded-full bg-blue-400/20 blur-3xl" />
+              <div className="relative flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="max-w-xl text-sm leading-6 text-slate-300">
-                    Open WhatsApp on your phone, go to
-                    <span className="font-bold text-white">
-                      {' '}
-                      Linked Devices
-                    </span>
-                    , choose
-                    <span className="font-bold text-white">
-                      {' '}
-                      Link a Device
-                    </span>
-                    , then select the phone-number pairing
-                    option.
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <div className="rounded-2xl border border-cyan-300/20 bg-black/30 px-6 py-5 shadow-inner">
-                    <span className="font-mono text-2xl font-black tracking-[0.3em] text-cyan-200 sm:text-3xl">
-                      {pairingCode}
+                  <div className="mb-2 flex items-center gap-2 text-blue-300">
+                    <Cloud size={19} />
+                    <span className="text-xs font-bold uppercase tracking-wider">
+                      Render deployment
                     </span>
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={copyPairingCode}
-                    className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10"
-                    title="Copy pairing code"
-                  >
-                    {copied ? (
-                      <CheckCircle2
-                        size={21}
-                        className="text-emerald-400"
+                  <h2 className="text-xl font-bold">
+                    {connected
+                      ? 'Your bot is online'
+                      : 'Ready to launch your bot?'}
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-400">
+                    {connected
+                      ? `Connected as ${displayPhone}`
+                      : 'Pair WhatsApp first, then start WA-AutoBot.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={deployBot}
+                  disabled={
+                    deploying ||
+                    connected ||
+                    !cleanPhone ||
+                    !pairingCode
+                  }
+                  className="inline-flex shrink-0 items-center justify-center gap-2 rounded-2xl bg-white px-7 py-4 font-black text-slate-950 shadow-xl transition hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {deploying ? (
+                    <>
+                      <Loader2
+                        size={19}
+                        className="animate-spin"
                       />
-                    ) : (
-                      <Copy size={21} />
-                    )}
-                  </button>
+                      Deploying...
+                    </>
+                  ) : connected ? (
+                    <>
+                      <CheckCircle2 size={19} />
+                      Bot Online
+                    </>
+                  ) : (
+                    <>
+                      <Rocket size={19} />
+                      Deploy Bot
+                    </>
+                  )}
+                </button>
+              </div>
+            </section>
+          </div>
+          {/* Right */}
+          <aside className="space-y-6">
+            {/* Progress */}
+            <section className="rounded-3xl border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl">
+              <div className="mb-6">
+                <p className="text-xs font-bold uppercase tracking-wider text-cyan-300">
+                  Setup progress
+                </p>
+                <h2 className="mt-1 text-xl font-bold">
+                  Connect in 4 steps
+                </h2>
+              </div>
+              <div className="space-y-5">
+                {steps.map((step, index) => (
+                  <div
+                    key={step.number}
+                    className="flex gap-3"
+                  >
+                    <div className="flex flex-col items-center">
+                      {step.complete ? (
+                        <CheckCircle2
+                          size={22}
+                          className="shrink-0 text-emerald-400"
+                        />
+                      ) : (
+                        <Circle
+                          size={22}
+                          className="shrink-0 text-slate-600"
+                        />
+                      )}
+                      {index !== steps.length - 1 && (
+                        <div className="mt-2 h-full min-h-8 w-px bg-white/10" />
+                      )}
+                    </div>
+                    <div className="-mt-0.5 pb-1">
+                      <p className="font-semibold">
+                        {step.title}
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">
+                        {step.description}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+            {/* Instructions */}
+            <section className="rounded-3xl border border-white/10 bg-white/[0.06] p-6 shadow-2xl backdrop-blur-xl">
+              <div className="mb-5 flex items-center gap-3">
+                <div className="rounded-xl bg-emerald-400/10 p-2.5">
+                  <Smartphone
+                    size={20}
+                    className="text-emerald-300"
+                  />
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-emerald-300">
+                    How to connect
+                  </p>
+                  <h2 className="mt-1 font-bold">
+                    Link your WhatsApp
+                  </h2>
                 </div>
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* CONNECTION / SERVER */}
-        <div className="grid gap-6 md:grid-cols-2">
-          <div
-            className={`rounded-3xl border p-6 ${
-              whatsappConnected
-                ? 'border-emerald-400/20 bg-emerald-500/[0.06]'
-                : 'border-white/10 bg-white/[0.035]'
-            }`}
-          >
-            <div className="flex items-center gap-4">
-              <div
-                className={`flex h-12 w-12 items-center justify-center rounded-2xl ${
-                  whatsappConnected
-                    ? 'bg-emerald-400/10 text-emerald-300'
-                    : 'bg-white/5 text-slate-400'
-                }`}
-              >
-                {whatsappConnected ? (
-                  <CheckCircle2 size={23} />
-                ) : (
-                  <Wifi size={23} />
-                )}
-              </div>
-
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                  WhatsApp Connection
-                </p>
-
-                <h3 className="mt-1 text-lg font-bold">
-                  {whatsappConnected
-                    ? 'WhatsApp Connected'
-                    : 'Waiting for Connection'}
-                </h3>
-
-                {account?.phone && (
-                  <p className="mt-1 text-xs text-slate-500">
-                    Account: {account.phone}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-3xl border border-white/10 bg-white/[0.035] p-6">
-            <div className="flex items-center gap-4">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-400/10 text-blue-300">
-                <Server size={23} />
-              </div>
-
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                  Bot Server
-                </p>
-
-                <h3 className="mt-1 text-lg font-bold">
-                  Render Backend
-                </h3>
-
-                <p className="mt-1 text-xs text-emerald-400">
-                  API connection configured
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* DEPLOY BUTTON */}
-        <div className="overflow-hidden rounded-3xl border border-blue-400/20 bg-gradient-to-r from-blue-950/80 via-slate-900 to-slate-950 p-6 shadow-2xl sm:p-7">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <div className="mb-2 flex items-center gap-2">
-                <Rocket
-                  size={17}
-                  className="text-blue-300"
+              <ol className="space-y-4 text-sm text-slate-300">
+                <Instruction
+                  number="1"
+                  text="Open WhatsApp on your phone."
                 />
-
-                <span className="text-xs font-black uppercase tracking-[0.2em] text-blue-300">
-                  Deployment
-                </span>
+                <Instruction
+                  number="2"
+                  text="Go to Settings → Linked Devices."
+                />
+                <Instruction
+                  number="3"
+                  text="Tap Link a Device."
+                />
+                <Instruction
+                  number="4"
+                  text="Choose Link with phone number."
+                />
+                <Instruction
+                  number="5"
+                  text="Enter the pairing code shown here."
+                />
+              </ol>
+              <div className="mt-5 rounded-2xl border border-amber-400/15 bg-amber-400/5 p-4 text-xs leading-5 text-amber-200/80">
+                Never share your WhatsApp pairing code with another person.
               </div>
-
-              <h3 className="text-xl font-bold">
-                Start WA-AutoBot
-              </h3>
-
-              <p className="mt-1 text-sm text-slate-400">
-                Start the server-side WhatsApp account and
-                monitor its connection.
+            </section>
+            {/* Trial */}
+            <section className="overflow-hidden rounded-3xl border border-violet-400/20 bg-gradient-to-br from-violet-500/15 to-blue-500/10 p-6 shadow-2xl">
+              <Sparkles
+                size={24}
+                className="mb-4 text-violet-300"
+              />
+              <h2 className="text-lg font-bold">
+                48-hour free trial
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-slate-400">
+                No payment is required to start testing WA-AutoBot.
+                Connect your WhatsApp and explore the bot features.
               </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={deployBot}
-              disabled={!cleanPhone || isBusy}
-              className="flex min-w-[190px] items-center justify-center gap-3 rounded-2xl bg-gradient-to-r from-emerald-500 to-cyan-500 px-6 py-4 text-sm font-black text-slate-950 shadow-xl shadow-cyan-950/30 transition hover:-translate-y-0.5 hover:from-emerald-400 hover:to-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
+              <div className="mt-5 flex items-center gap-2 text-xs font-semibold text-emerald-300">
+                <CheckCircle2 size={15} />
+                No payment required to start
+              </div>
+            </section>
+            {/* External link */}
+            <a
+              href="https://wa.me/"
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-sm font-semibold text-slate-300 transition hover:bg-white/[0.08]"
             >
-              {status === 'deploying' ? (
-                <>
-                  <Loader2
-                    size={19}
-                    className="animate-spin"
-                  />
-                  STARTING...
-                </>
-              ) : (
-                <>
-                  <Play size={19} />
-                  DEPLOY BOT
-                </>
-              )}
-            </button>
-          </div>
+              <span className="flex items-center gap-2">
+                <MessageCircle size={17} />
+                Open WhatsApp
+              </span>
+              <ExternalLink size={16} />
+            </a>
+          </aside>
+        </div>
+        <div className="mt-8 border-t border-white/10 pt-5 text-center text-xs text-slate-600">
+          WA-AutoBot • WhatsApp automation platform
         </div>
       </div>
     </div>
   );
 }
-
-function Feature({
+function FeatureCard({
   icon,
   title,
   description,
   enabled,
+  onClick,
 }) {
   return (
-    <div className="group flex items-center gap-4 rounded-2xl border border-white/10 bg-black/10 p-4 transition hover:border-blue-400/20 hover:bg-blue-500/[0.04]">
-      <div
-        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
-          enabled
-            ? 'bg-blue-500/10 text-blue-300 ring-1 ring-blue-400/10'
-            : 'bg-white/5 text-slate-600'
-        }`}
-      >
-        {icon}
-      </div>
-
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <h4 className="text-sm font-bold text-white">
-            {title}
-          </h4>
-
-          {enabled ? (
-            <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-emerald-300">
-              Enabled
-            </span>
-          ) : (
-            <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-slate-500">
-              Off
-            </span>
-          )}
+    <button
+      type="button"
+      onClick={onClick}
+      className={`group rounded-2xl border p-4 text-left transition ${
+        enabled
+          ? 'border-blue-400/20 bg-blue-400/10'
+          : 'border-white/10 bg-black/10'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div
+          className={`rounded-xl p-2.5 ${
+            enabled
+              ? 'bg-blue-400/15 text-blue-300'
+              : 'bg-white/5 text-slate-500'
+          }`}
+        >
+          {icon}
         </div>
-
-        <p className="mt-1 text-xs leading-5 text-slate-500">
-          {description}
-        </p>
+        <div
+          className={`h-5 w-9 rounded-full p-0.5 transition ${
+            enabled
+              ? 'bg-blue-500'
+              : 'bg-slate-700'
+          }`}
+        >
+          <div
+            className={`h-4 w-4 rounded-full bg-white transition ${
+              enabled ? 'translate-x-4' : 'translate-x-0'
+            }`}
+          />
+        </div>
       </div>
-    </div>
+      <p className="mt-4 font-bold">
+        {title}
+      </p>
+      <p className="mt-1 text-xs leading-5 text-slate-500">
+        {description}
+      </p>
+    </button>
+  );
+}
+function Instruction({ number, text }) {
+  return (
+    <li className="flex items-start gap-3">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white/10 text-xs font-black text-white">
+        {number}
+      </span>
+      <span className="pt-1 leading-5">
+        {text}
+      </span>
+    </li>
   );
 }
