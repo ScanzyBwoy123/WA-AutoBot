@@ -64,6 +64,140 @@ app.use(express.urlencoded({
   limit: '10mb'
 }));
 /* ============================================================
+ * DASHBOARD DATA ROUTES
+ * Connect the React dashboard to the existing backend data.
+ * ============================================================ */
+
+const db = require('./database/db');
+
+app.get('/api/commands', (req, res) => {
+  try {
+    const router =
+      multiAccountWhatsApp.getCommandRouter();
+
+    const names =
+      router &&
+      typeof router.getCommandNames === 'function'
+        ? router.getCommandNames()
+        : [];
+
+    return res.status(200).json({
+      success: true,
+      data: names
+    });
+
+  } catch (error) {
+    console.error(
+      '[API] Commands list error:',
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error?.message ||
+        'Failed to get commands'
+    });
+  }
+});
+
+
+app.get('/api/settings', (req, res) => {
+  try {
+    return res.status(200).json({
+      success: true,
+      data: db.getSettings()
+    });
+
+  } catch (error) {
+    console.error(
+      '[API] Settings error:',
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error?.message ||
+        'Failed to get settings'
+    });
+  }
+});
+
+
+app.put('/api/settings', (req, res) => {
+  try {
+    const settings =
+      db.updateSettings(
+        req.body || {}
+      );
+
+    return res.status(200).json({
+      success: true,
+      data: settings
+    });
+
+  } catch (error) {
+    console.error(
+      '[API] Update settings error:',
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error?.message ||
+        'Failed to update settings'
+    });
+  }
+});
+
+
+app.get('/api/activity', (req, res) => {
+  try {
+    return res.status(200).json({
+      success: true,
+      data: db.getActivities()
+    });
+
+  } catch (error) {
+    console.error(
+      '[API] Activity error:',
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error?.message ||
+        'Failed to get activity'
+    });
+  }
+});
+
+
+app.get('/api/media', (req, res) => {
+  try {
+    return res.status(200).json({
+      success: true,
+      data: db.getMedia()
+    });
+
+  } catch (error) {
+    console.error(
+      '[API] Media error:',
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error?.message ||
+        'Failed to get media'
+    });
+  }
+});
+/* ============================================================
  * DASHBOARD COMMAND BRIDGE
  * Uses the same command router as the WhatsApp bot.
  * ============================================================ */
