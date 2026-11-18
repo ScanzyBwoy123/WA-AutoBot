@@ -118,6 +118,76 @@ class MultiAccountWhatsAppService {
       this.normalizeNumber(phone)
     );
   }
+    cleanupStaleChromiumProfileLock(phone) {
+    const profileDir = path.join(
+      this.sessionsDir,
+      `session-${this.getSessionId(phone)}`
+    );
+
+    const lockPath = path.join(
+      profileDir,
+      'SingletonLock'
+    );
+
+    try {
+      if (!fs.existsSync(profileDir)) return;
+
+      const lockStat = fs.lstatSync(lockPath);
+
+      if (!lockStat.isSymbolicLink()) return;
+
+      const lockTarget = fs.readlinkSync(lockPath);
+      const match = lockTarget.match(/^(.*)-(\d+)$/);
+
+      if (!match) return;
+
+      const lockHost = match[1];
+      const lockPid = Number(match[2]);
+
+      if (lockHost === os.hostname()) {
+        try {
+          process.kill(lockPid, 0);
+          return;
+        } catch (error) {
+          if (error.code !== 'ESRCH') return;
+        }
+      }
+
+      const markers = [
+        'SingletonLock',
+        'SingletonCookie',
+        'SingletonSocket'
+      ];
+
+      for (const marker of markers) {
+        const markerPath = path.join(profileDir, marker);
+
+        try {
+          fs.unlinkSync(markerPath);
+        } catch (error) {
+          if (error.code !== 'ENOENT') {
+            console.warn(
+              '[MultiAccountWhatsApp] Could not remove Chromium marker:',
+              marker,
+              error.message
+            );
+          }
+        }
+      }
+
+      console.log(
+        '[MultiAccountWhatsApp] Removed stale Chromium lock markers for:',
+        phone
+      );
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        console.warn(
+          '[MultiAccountWhatsApp] Profile lock check failed:',
+          error.message
+        );
+      }
+    }
+  }
 
   isConnected(phone) {
     const client =
