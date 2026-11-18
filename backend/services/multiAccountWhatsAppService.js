@@ -2021,6 +2021,7 @@ class MultiAccountWhatsAppService {
 
 
     try {
+            this.cleanupStaleChromiumProfileLock(normalized);
       const chromePath =
         this.getChromePath();
 
@@ -2039,7 +2040,8 @@ class MultiAccountWhatsAppService {
       const puppeteerConfig = {
         headless: true,
 
-        args: [
+                args: [
+          '--headless=new',
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
