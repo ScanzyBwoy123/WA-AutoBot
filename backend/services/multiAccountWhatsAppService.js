@@ -31,6 +31,8 @@ class MultiAccountWhatsAppService {
 
     // phone -> currently connecting
     this.connecting = new Set();
+    // Track intentional account disconnections
+    this.manualDisconnects = new Set();
 
     // phone -> latest pairing code
     this.pairingCodes = new Map();
@@ -1467,7 +1469,14 @@ class MultiAccountWhatsAppService {
   this.clients.delete(
     normalized
   );
+  if (this.manualDisconnects.has(normalized)) {
+  console.log(
+    `[MultiAccountWhatsApp] Manual disconnect detected for ${normalized}. Reconnect cancelled.`
+  );
 
+  this.manualDisconnects.delete(normalized);
+  return;
+}
   /*
    * ============================================================
    * AUTOMATIC RECONNECT
@@ -2274,7 +2283,7 @@ class MultiAccountWhatsAppService {
   async disconnectAccount(phone) {
     const normalized =
       this.normalizeNumber(phone);
-
+      this.manualDisconnects.add(normalized);
     this.stopStatusMonitor(
       normalized
     );
