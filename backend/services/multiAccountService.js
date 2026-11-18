@@ -6,9 +6,9 @@ class MultiAccountService {
   constructor() {
     this.accounts = new Map();
     this.dataDir = path.join(
-      process.cwd(),
-      'multi-account-data'
-    );
+  process.env.WA_DATA_DIR || process.cwd(),
+  'multi-account-data'
+);
     this.accountsFile = path.join(
       this.dataDir,
       'accounts.json'
