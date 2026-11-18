@@ -2,13 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
-  >
-
-  <title>WA-AutoBot — WhatsApp Pairing</title>
+  <title>WA-AutoBot — Testing</title>
 
   <style>
     * {
@@ -18,750 +14,105 @@
     body {
       margin: 0;
       min-height: 100vh;
-
       display: flex;
       align-items: center;
       justify-content: center;
-
       padding: 20px;
-
-      font-family:
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        sans-serif;
-
-      background:
-        linear-gradient(
-          135deg,
-          #111827,
-          #172554,
-          #0f172a
-        );
-
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: linear-gradient(135deg, #111827, #172554, #0f172a);
       color: white;
     }
 
     .card {
       width: 100%;
-      max-width: 480px;
-
-      padding: 30px;
-
+      max-width: 460px;
+      padding: 35px 28px;
       border-radius: 24px;
-
-      background:
-        rgba(255,255,255,0.08);
-
-      border:
-        1px solid
-        rgba(255,255,255,0.15);
-
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15);
       backdrop-filter: blur(20px);
-
-      box-shadow:
-        0 25px 70px
-        rgba(0,0,0,0.35);
+      box-shadow: 0 25px 70px rgba(0,0,0,0.35);
+      text-align: center;
     }
 
     .logo {
-      text-align: center;
-      font-size: 48px;
-      margin-bottom: 10px;
+      font-size: 55px;
+      margin-bottom: 15px;
     }
 
     h1 {
-      text-align: center;
-      margin: 0 0 8px;
-      font-size: 28px;
+      margin: 0 0 12px;
+      font-size: 30px;
     }
 
     .subtitle {
-      text-align: center;
       color: #cbd5e1;
-      line-height: 1.5;
-      margin-bottom: 28px;
+      line-height: 1.7;
     }
 
-    label {
-      display: block;
-      margin-bottom: 8px;
-      font-weight: 600;
+    .notice {
+      margin-top: 25px;
+      padding: 20px;
+      border-radius: 15px;
+      background: rgba(234,179,8,0.12);
+      border: 1px solid rgba(234,179,8,0.3);
+      color: #fde68a;
+      line-height: 1.7;
     }
 
-    input {
-      width: 100%;
-
-      padding: 15px;
-
-      border-radius: 12px;
-
-      border:
-        1px solid
-        rgba(255,255,255,0.2);
-
-      background:
-        rgba(0,0,0,0.25);
-
-      color: white;
-
-      font-size: 16px;
-
-      outline: none;
-    }
-
-    input:focus {
-      border-color: #22c55e;
-    }
-
-    button {
-      width: 100%;
-
-      margin-top: 18px;
-
-      padding: 15px;
-
-      border: 0;
-
-      border-radius: 12px;
-
-      background: #22c55e;
-
-      color: white;
-
-      font-size: 16px;
-
-      font-weight: 700;
-
-      cursor: pointer;
-    }
-
-    button:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
-
-    .trial {
+    .status {
       margin-top: 20px;
-
-      padding: 15px;
-
-      border-radius: 12px;
-
-      background:
-        rgba(34,197,94,0.12);
-
-      border:
-        1px solid
-        rgba(34,197,94,0.3);
-
-      text-align: center;
-
-      color: #bbf7d0;
-    }
-
-    .result {
-      display: none;
-
-      margin-top: 22px;
-
-      padding: 20px;
-
-      border-radius: 16px;
-
-      background:
-        rgba(0,0,0,0.25);
-
-      text-align: center;
-    }
-
-    .code {
-      margin: 18px 0;
-
-      padding: 20px;
-
-      border-radius: 14px;
-
-      background: #020617;
-
-      font-size: 30px;
-
-      font-weight: 800;
-
-      letter-spacing: 5px;
-
-      color: #4ade80;
-
-      word-break: break-word;
-    }
-
-    .message {
-      margin-top: 15px;
-
-      color: #cbd5e1;
-
-      line-height: 1.5;
-    }
-
-    .success {
       color: #86efac;
       font-weight: 700;
     }
 
-    .error {
-      color: #fca5a5;
-      font-weight: 700;
-    }
-
-    .loading {
-      color: #fde68a;
-      font-weight: 600;
-    }
-
-    .instructions {
-      margin-top: 20px;
-
-      padding: 18px;
-
-      border-radius: 14px;
-
-      background:
-        rgba(59,130,246,0.12);
-
-      border:
-        1px solid
-        rgba(59,130,246,0.25);
-
-      text-align: left;
-
-      line-height: 1.7;
-
-      color: #dbeafe;
-    }
-
-    .small {
-      margin-top: 18px;
-
-      text-align: center;
-
-      font-size: 13px;
-
+    .footer {
+      margin-top: 25px;
       color: #94a3b8;
+      font-size: 13px;
     }
   </style>
 </head>
 
 <body>
 
-<div class="card">
+  <main class="card">
 
-  <div class="logo">
-    🤖
-  </div>
+    <div class="logo">🤖</div>
 
-  <h1>
-    WA-AutoBot
-  </h1>
+    <h1>WA-AutoBot</h1>
 
-  <div class="subtitle">
-    Connect your WhatsApp account
-    and try WA-AutoBot free for
-    48 hours.
-  </div>
+    <p class="subtitle">
+      Intelligent WhatsApp automation
+      with support for multiple accounts.
+    </p>
 
-  <form id="pairForm">
+    <div class="notice">
+      🛠️ <strong>System Under Testing</strong>
 
-    <label for="phone">
-      WhatsApp phone number
-    </label>
+      <br><br>
 
-    <input
-      id="phone"
-      type="tel"
-      placeholder="233XXXXXXXXX"
-      autocomplete="tel"
-      required
-    >
+      We are currently testing WhatsApp
+      connection stability, account sessions
+      and automation features.
 
-    <button
-      id="continueBtn"
-      type="submit"
-    >
-      Start Free Trial
-    </button>
+      <br><br>
 
-  </form>
+      New account registrations and pairing
+      are temporarily unavailable.
+    </div>
 
-  <div class="trial">
-    🎁 48-hour free trial
-    <br>
-    No payment required to start.
-  </div>
+    <div class="status">
+      ● Development and testing in progress
+    </div>
 
-  <div
-    id="result"
-    class="result"
-  ></div>
+    <div class="footer">
+      Thank you for your patience.
+      <br>
+      WA-AutoBot Development Team
+    </div>
 
-  <div class="small">
-    Your WhatsApp account will only be
-    connected after you approve the
-    pairing request.
-  </div>
-
-</div>
-
-
-<script>
-
-const form =
-  document.getElementById(
-    'pairForm'
-  );
-
-const phoneInput =
-  document.getElementById(
-    'phone'
-  );
-
-const button =
-  document.getElementById(
-    'continueBtn'
-  );
-
-const result =
-  document.getElementById(
-    'result'
-  );
-
-
-let pollingTimer = null;
-
-
-/*
- * Normalize phone number.
- */
-function normalizePhone(phone) {
-
-  return String(phone || '')
-    .replace(/\D/g, '');
-
-}
-
-
-/*
- * Display result.
- */
-function showResult(html) {
-
-  result.style.display =
-    'block';
-
-  result.innerHTML =
-    html;
-
-}
-
-
-/*
- * Check pairing code.
- */
-async function checkPairingCode(phone) {
-
-  try {
-
-    const response =
-      await fetch(
-        `/api/pair/pairing-code/${encodeURIComponent(phone)}`
-      );
-
-    const data =
-      await response.json();
-
-
-    if (!response.ok ||
-        !data.success) {
-
-      if (
-        response.status === 403
-      ) {
-
-        clearInterval(
-          pollingTimer
-        );
-
-        showResult(`
-          <div class="error">
-            ❌ Trial expired
-          </div>
-
-          <div class="message">
-            Your free trial is no longer
-            active. Please subscribe to
-            continue using WA-AutoBot.
-          </div>
-        `);
-      }
-
-      return;
-    }
-
-
-    const pairingCode =
-      data.data &&
-      data.data.pairingCode;
-
-
-    if (pairingCode) {
-
-      clearInterval(
-        pollingTimer
-      );
-
-      showResult(`
-        <div class="success">
-          🔑 Your WhatsApp pairing code
-        </div>
-
-        <div class="code">
-          ${pairingCode}
-        </div>
-
-        <div class="instructions">
-
-          <strong>
-            How to connect:
-          </strong>
-
-          <br><br>
-
-          1. Open WhatsApp on your phone.
-
-          <br>
-
-          2. Go to
-          <strong>
-            Settings → Linked Devices
-          </strong>
-
-          <br>
-
-          3. Tap
-          <strong>
-            Link a device
-          </strong>
-
-          <br>
-
-          4. Choose
-          <strong>
-            Link with phone number
-          </strong>
-
-          <br>
-
-          5. Enter the pairing code above.
-
-        </div>
-
-        <div class="message">
-          ⏳ Waiting for WhatsApp
-          connection...
-        </div>
-      `);
-
-      startConnectionPolling(
-        phone
-      );
-
-    }
-
-  } catch (error) {
-
-    console.error(
-      'Pairing code check error:',
-      error
-    );
-
-  }
-
-}
-
-
-/*
- * Check WhatsApp connection.
- */
-async function checkConnection(
-  phone
-) {
-
-  try {
-
-    const response =
-      await fetch(
-        `/api/pair/status/${encodeURIComponent(phone)}`
-      );
-
-    const data =
-      await response.json();
-
-
-    if (!response.ok ||
-        !data.success) {
-
-      return;
-    }
-
-
-    const whatsapp =
-      data.data &&
-      data.data.whatsapp;
-
-
-    if (
-      whatsapp &&
-      whatsapp.connected
-    ) {
-
-      clearInterval(
-        pollingTimer
-      );
-
-      showResult(`
-        <div class="success">
-          ✅ WhatsApp Connected!
-        </div>
-
-        <div class="message">
-          Your WhatsApp account is now
-          connected to WA-AutoBot.
-        </div>
-
-        <div class="message">
-          🎉 Your 48-hour free trial
-          is active.
-        </div>
-      `);
-
-      return true;
-    }
-
-
-  } catch (error) {
-
-    console.error(
-      'Connection check error:',
-      error
-    );
-
-  }
-
-  return false;
-
-}
-
-
-/*
- * Poll WhatsApp connection.
- */
-function startConnectionPolling(
-  phone
-) {
-
-  if (pollingTimer) {
-
-    clearInterval(
-      pollingTimer
-    );
-
-  }
-
-
-  pollingTimer =
-    setInterval(
-      async () => {
-
-        const connected =
-          await checkConnection(
-            phone
-          );
-
-        if (connected) {
-
-          clearInterval(
-            pollingTimer
-          );
-
-        }
-
-      },
-      3000
-    );
-
-}
-
-
-/*
- * Start registration.
- */
-form.addEventListener(
-  'submit',
-  async (event) => {
-
-    event.preventDefault();
-
-
-    const phone =
-      normalizePhone(
-        phoneInput.value
-      );
-
-
-    if (!phone) {
-
-      showResult(`
-        <div class="error">
-          ❌ Enter a valid phone number.
-        </div>
-      `);
-
-      return;
-
-    }
-
-
-    button.disabled =
-      true;
-
-    button.textContent =
-      'Starting trial...';
-
-
-    showResult(`
-      <div class="loading">
-        ⏳ Creating your account...
-      </div>
-
-      <div class="message">
-        Please wait.
-      </div>
-    `);
-
-
-    try {
-
-      const response =
-        await fetch(
-          '/api/pair/register',
-          {
-            method: 'POST',
-
-            headers: {
-              'Content-Type':
-                'application/json'
-            },
-
-            body: JSON.stringify({
-              phone
-            })
-          }
-        );
-
-
-      const data =
-        await response.json();
-
-
-      if (!response.ok ||
-          !data.success) {
-
-        throw new Error(
-          data.message ||
-          'Unable to create trial.'
-        );
-
-      }
-
-
-      showResult(`
-        <div class="success">
-          ✅ Trial account ready
-        </div>
-
-        <div class="message">
-          WhatsApp number:
-          <strong>
-            ${phone}
-          </strong>
-        </div>
-
-        <div class="loading">
-          🔑 Waiting for your
-          WhatsApp pairing code...
-        </div>
-
-        <div class="message">
-          This may take a few seconds.
-        </div>
-      `);
-
-
-      button.textContent =
-        'Pairing in progress...';
-
-
-      /*
-       * Check immediately.
-       */
-      await checkPairingCode(
-        phone
-      );
-
-
-      /*
-       * Continue checking for
-       * pairing code.
-       */
-      pollingTimer =
-        setInterval(
-          async () => {
-
-            await checkPairingCode(
-              phone
-            );
-
-          },
-          3000
-        );
-
-
-    } catch (error) {
-
-      console.error(
-        'Registration error:',
-        error
-      );
-
-
-      showResult(`
-        <div class="error">
-          ❌ ${error.message}
-        </div>
-      `);
-
-
-      button.disabled =
-        false;
-
-      button.textContent =
-        'Start Free Trial';
-
-    }
-
-  }
-);
-
-</script>
+  </main>
 
 </body>
 </html>
