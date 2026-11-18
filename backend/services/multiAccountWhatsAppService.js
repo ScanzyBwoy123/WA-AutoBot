@@ -69,9 +69,9 @@ class MultiAccountWhatsAppService {
      * WhatsApp sessions
      */
     this.sessionsDir = path.join(
-      process.cwd(),
-      '.wwebjs_multi_accounts'
-    );
+  process.env.WA_DATA_DIR || process.cwd(),
+  '.wwebjs_multi_accounts'
+);
 
     this.ensureSessionDirectory();
 
