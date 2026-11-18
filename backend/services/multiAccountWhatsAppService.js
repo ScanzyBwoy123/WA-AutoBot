@@ -1573,10 +1573,10 @@ class MultiAccountWhatsAppService {
               normalized
             );
 
-          if (
-            !access ||
-            access.active !== true
-          ) {
+           if (
+  !access ||
+  access.allowed !== true
+) {
             console.log(
               `[MultiAccountWhatsApp] Account ${normalized} is not active. Reconnect cancelled.`
             );
